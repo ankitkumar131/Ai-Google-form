@@ -1,0 +1,65 @@
+# Architecture
+
+## Boundaries
+
+```text
+React popup / dashboard (trusted extension pages)
+  │ typed request envelope, no secrets returned
+  ▼
+MV3 background worker
+  ├─ sender validation + Zod request validation
+  ├─ chrome.storage local/sync/session access restricted to TRUSTED_CONTEXTS
+  ├─ passphrase key vault → provider adapters → HTTPS AI APIs
+  ├─ profiles / answer memory / IndexedDB activity reports
+  └─ run coordinator
+       ├─ webNavigation.getAllFrames → FP_SCAN on each accessible frame
+       ├─ local profile → confirmed answer → batched provider fallback
+       ├─ validate answer ID, type, schema, exact options, confidence
+       └─ FP_FILL → verified result → report
+            ▼
+       Isolated content-script world in each website frame
+         DOM + site adapter + open shadow roots
+         native setters / user-like choice clicks / input & change events
+         no vault, profile database, provider API or page-message bridge
+```
+
+The extension UI is compiled by Vite. `scripts/build-extension.mjs` uses esbuild to make a single IIFE content script and an ESM service worker. All executable code is bundled locally; no remote scripts, `eval`, or inline extension scripts. `public/manifest.json` and icons are copied into `dist`.
+
+## Modules
+
+- `src/shared/`: entities, default providers, profile fields and Zod validation.
+- `src/services/profile.ts`: field-description matching, relevant fact selection, normalized exact memory reuse and token-based search similarity.
+- `src/services/vault.ts`: background-only encryption, unlock, lock and key updates.
+- `src/services/providers.ts`: OpenAI-compatible, Anthropic and Gemini wire formats; prompt construction; strict response parsing; bounded retry/fallback.
+- `src/services/memory.ts`: transaction-complete IndexedDB access, separate `answers` and `reports` stores.
+- `src/services/storage.ts`: trusted settings, report retention and serialized failure logging.
+- `src/extension/adapters.ts`: Google/Microsoft/Workday/LinkedIn DOM hints.
+- `src/extension/detector.ts`: extraction and safe fill/verification, isolated per document.
+- `src/extension/content.ts`: extension-only scan/fill bridge and debounced invalidation.
+- `src/extension/runner.ts`: per-tab locks, scan/match/generate/fill/report pipeline and cancellation budget.
+- `src/extension/background.ts`: trusted-page request router. Page/content-script senders cannot call settings, vault, AI, or fill orchestration.
+- `src/ui/pages/`: six dashboard pages. `components.tsx`: reusable components. `dialogs.tsx`: installation guidance, tab selection and per-field reports.
+- `src/ui/bridge.ts`: extension transport or explicitly limited local web-preview adapter.
+- `src/popup.tsx`: active-tab workflow and progress subscription.
+
+## Data model
+
+Questions carry frame + document-local IDs, accessible text, type, available options, context, constraints, required flags, current values and sensitivity classification. Node references never leave the content script. Answers carry matching IDs, types, a string/checkbox array, confidence, source and optional explanation. Reports retain each original question and the outcome, including preserved/manual-review/failed states.
+
+Profile IDs namespace confirmed answers. Multiple profiles are supported now, not just reserved for later. All profile fields are optional; user-selected mandatory fields are validated before saving. Resume text stays in the profile as a local reference, never in the provider payload.
+
+IndexedDB retains at most 20 run reports. Failure logs retain 50 sanitized records. Confirmed answers persist until edited/deleted. There is no server-side storage. Neither IndexedDB nor Chrome local storage is an encrypted personal-data store; only API keys receive application-level encryption.
+
+## Failure semantics
+
+- HTTP/auth/network failures, timeout, malformed JSON, omitted/duplicate IDs, incompatible types, impossible option labels: bounded retries where transient, then next enabled provider in priority order.
+- Valid but uncertain answers: stop fallback and mark for review.
+- Missing known personal facts: review, not invention.
+- No usable provider: finish local matches and report unanswered questions.
+- Page value changed, label/options changed, duplicate choice labels, disconnected control, invalid format, or rejected DOM update: do not claim successful filling.
+- Original document replaced: its unique question IDs no longer exist. Applying an old report requires a fresh scan/run.
+- User cancellation or run time budget: abort provider requests; leave remaining answers for review. No automated navigation or submission.
+
+## Why no automatic semantic reuse?
+
+Token overlap alone loses negation and word order (“move from Pune to Mumbai” versus the reverse). The Question bank uses similarity for discovery/search, but only normalized exact wording (with an optional leading “please”) is eligible for automatic reuse. User confirmation remains the trust boundary. Embedding retrieval could later suggest more matches without silently applying them.
