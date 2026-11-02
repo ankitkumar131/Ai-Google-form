@@ -39,5 +39,10 @@ export function adapterContainer(el: HTMLElement): HTMLElement | null {
 }
 export function adapterTitle(container: HTMLElement): Element | null {
   const a = currentAdapter();
+  if (a?.name === 'Google Forms')
+    return (
+      container.querySelector('.M7eMe,.freebirdFormviewerComponentsQuestionBaseTitle') ||
+      container.querySelector('[role="heading"]')
+    );
   return a ? container.querySelector(a.title) : null;
 }

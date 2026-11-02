@@ -1,3 +1,4 @@
+import { normalizeProvider, providerRequestUrl } from '../src/services/providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultProviders } from '../src/shared/defaults';
 import {
@@ -67,7 +68,9 @@ describe('provider requests and fallback', () => {
       log,
     );
     expect(result.provider).toBe('Groq');
-    expect(log).toHaveBeenCalledWith(expect.objectContaining({ message: 'HTTP 401' }));
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('HTTP 401') }),
+    );
     expect(JSON.stringify(log.mock.calls)).not.toContain('secret');
   });
   it('does not fall back merely because an answer is uncertain', async () => {
@@ -159,5 +162,64 @@ describe('provider requests and fallback', () => {
     await expect(
       queryProvider(defaultProviders[1], 'key', [question()], undefined, controller.signal),
     ).rejects.toThrow('Run cancelled');
+  });
+});
+
+describe('provider endpoint normalization regressions', () => {
+  it.each([
+    [
+      'openai',
+      'https://api.openai.com/v1/chat/completions',
+      'gpt-4.1-mini',
+      'https://api.openai.com/v1/chat/completions',
+    ],
+    [
+      'anthropic',
+      'https://api.anthropic.com/v1/messages',
+      'claude-sonnet-4-5',
+      'https://api.anthropic.com/v1/messages',
+    ],
+    [
+      'groq',
+      'https://api.groq.com',
+      'llama-3.3-70b-versatile',
+      'https://api.groq.com/openai/v1/chat/completions',
+    ],
+    [
+      'openrouter',
+      'https://openrouter.ai/api/v1/chat/completions',
+      'openai/gpt-4.1-mini',
+      'https://openrouter.ai/api/v1/chat/completions',
+    ],
+    [
+      'gemini',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      'models/gemini-2.5-flash',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    ],
+    [
+      'custom',
+      'https://my-model.example/api/chat/completions',
+      'my-model',
+      'https://my-model.example/api/chat/completions',
+    ],
+  ])('does not duplicate operation paths for %s', (id, endpoint, model, url) => {
+    const p = { ...defaultProviders.find((p) => p.id === id)!, endpoint, model };
+    expect(providerRequestUrl(p)).toBe(url);
+    expect(normalizeProvider(normalizeProvider(p))).toEqual(normalizeProvider(p));
+  });
+  it('a fast 404 still comes from a real fetch and names the requested URL', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetch);
+    const p = {
+      ...defaultProviders.find((p) => p.id === 'openai')!,
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+    };
+    await expect(queryProvider(p, 'never-log-this-key', [question()])).rejects.toThrow(
+      'HTTP 404: Endpoint or model not found.',
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0][0]).toBe('https://api.openai.com/v1/chat/completions');
+    expect(fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer never-log-this-key');
   });
 });

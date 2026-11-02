@@ -162,3 +162,23 @@ describe('stale question protection', () => {
     expect((await d.fill(answer(q, 'Red'), false)).success).toBe(false);
   });
 });
+
+describe('material form control regressions', () => {
+  it('keeps native inputs with explicit ARIA roles instead of deduplicating themselves', () => {
+    document.body.innerHTML =
+      '<fieldset><legend>Pick one</legend><label><input role="radio" type="radio" name="r" value="yes">Yes</label><label><input role="radio" type="radio" name="r" value="no">No</label></fieldset>';
+    expect(new FormDetector().scan()[0].options.map((o) => o.label)).toEqual(['Yes', 'No']);
+  });
+  it('recognizes transparent native choices with visible labels', () => {
+    document.body.innerHTML = '<label><input type="radio" name="r" style="opacity:0">Yes</label>';
+    expect(new FormDetector().scan()).toHaveLength(1);
+  });
+  it('does not treat unselected hidden listbox options as an existing answer', () => {
+    document.body.innerHTML =
+      '<div role="listitem"><div role="heading">Planet</div><div role="listbox" aria-expanded="false"><div role="option" aria-selected="true">Choose</div><div role="option" aria-selected="false" hidden>Mars</div></div></div>';
+    const q = new FormDetector().scan()[0];
+    expect(q.type).toBe('select');
+    expect(q.currentValue).toBe('');
+    expect(q.options.map((o) => o.label)).toEqual(['Mars']);
+  });
+});

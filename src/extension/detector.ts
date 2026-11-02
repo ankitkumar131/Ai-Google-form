@@ -15,9 +15,17 @@ const consent =
 export function isVisible(el: HTMLElement): boolean {
   if (!el.isConnected || el.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
   const style = getComputedStyle(el);
-  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')
-    return false;
-  return el.getClientRects().length > 0;
+  const visible =
+    style.display !== 'none' &&
+    style.visibility !== 'hidden' &&
+    style.opacity !== '0' &&
+    el.getClientRects().length > 0;
+  if (visible) return true;
+  // Styled native choices are often transparent/zero-sized while their labels
+  // remain visible and clickable. Do not apply this exception to text honeypots.
+  if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type))
+    return [...(el.labels || [])].some((label) => isVisible(label));
+  return false;
 }
 function allRoots(root: Document | ShadowRoot): (Document | ShadowRoot)[] {
   const roots: (Document | ShadowRoot)[] = [root];
@@ -46,6 +54,25 @@ function labelled(el: HTMLElement): string {
   }
   return text(el.closest('label'));
 }
+function choiceLabel(el: HTMLElement): string {
+  return (
+    el.getAttribute('data-answer-value') ||
+    el.getAttribute('aria-label') ||
+    labelled(el) ||
+    el.getAttribute('data-value') ||
+    text(el) ||
+    (el as HTMLInputElement).value ||
+    ''
+  ).trim();
+}
+function choiceGroup(el: HTMLElement): HTMLElement | null {
+  return el.closest('[role="radiogroup"]') || questionContainer(el);
+}
+function isPlaceholder(value: string): boolean {
+  return /^(?:choose|select|please select)(?: an? (?:option|answer)| one)?[.\s…]*$/i.test(
+    value.trim(),
+  );
+}
 // Explicit adapters add context; the generic accessible-control scanner remains the fallback.
 export function questionContainer(el: HTMLElement): HTMLElement | null {
   return (
@@ -55,8 +82,16 @@ export function questionContainer(el: HTMLElement): HTMLElement | null {
     )
   );
 }
-function questionLabel(el: HTMLElement, group = false): string {
+function rawQuestionLabel(el: HTMLElement, group = false): string {
   const container = questionContainer(el);
+  const radioGroup = group && el.closest<HTMLElement>('[role="radiogroup"]');
+  if (radioGroup) {
+    const groupLabel = labelled(radioGroup);
+    if (groupLabel) {
+      const title = container && text(adapterTitle(container));
+      return title && !groupLabel.includes(title) ? `${title} — ${groupLabel}` : groupLabel;
+    }
+  }
   if (group && container) {
     const parents = [
       container,
@@ -94,6 +129,11 @@ function questionLabel(el: HTMLElement, group = false): string {
     'Unlabelled field'
   );
 }
+function questionLabel(el: HTMLElement, group = false): string {
+  return rawQuestionLabel(el, group)
+    .replace(/\s*\*\s*$/, '')
+    .trim();
+}
 function getType(el: HTMLElement): QuestionType {
   const role = el.getAttribute('role');
   if (role === 'radio' || role === 'checkbox') return role;
@@ -122,19 +162,22 @@ function currentValue(elements: HTMLElement[], type: QuestionType): string {
       .filter((el) =>
         el instanceof HTMLInputElement ? el.checked : el.getAttribute('aria-checked') === 'true',
       )
-      .map((el) => labelled(el) || text(el))
+      .map(choiceLabel)
       .join(', ');
   }
   const el = elements[0];
   if (el instanceof HTMLSelectElement)
-    return el.value ? el.selectedOptions[0]?.text.trim() || '' : '';
+    return el.value && !isPlaceholder(el.selectedOptions[0]?.text || '')
+      ? el.selectedOptions[0]?.text.trim() || ''
+      : '';
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value;
-  if (el.getAttribute('role') === 'combobox' || el.getAttribute('role') === 'listbox')
-    return (
+  if (el.getAttribute('role') === 'combobox' || el.getAttribute('role') === 'listbox') {
+    const value =
       el.getAttribute('aria-valuetext') ||
       text(el.querySelector('[aria-selected="true"]')) ||
-      text(el)
-    );
+      (!el.querySelector('[role="option"]') ? text(el) : '');
+    return isPlaceholder(value) ? '' : value;
+  }
   return el.textContent?.trim() || '';
 }
 export class FormDetector {
@@ -177,8 +220,10 @@ export class FormDetector {
           return false;
         if (el.parentElement?.closest('[contenteditable="true"],[role="textbox"]')) return false;
         // Many component libraries render a native input inside an ARIA wrapper. Keep one control only.
-        if (el.matches('input') && el.closest('[role="radio"],[role="checkbox"],[role="combobox"]'))
-          return false;
+        if (el.matches('input')) {
+          const wrapper = el.closest('[role="radio"],[role="checkbox"],[role="combobox"]');
+          if (wrapper && wrapper !== el) return false;
+        }
         return isVisible(el);
       });
     const visited = new Set<HTMLElement>();
@@ -188,18 +233,19 @@ export class FormDetector {
       let elements = [el];
       if ((type === 'radio' || type === 'checkbox') && !(el instanceof HTMLSelectElement)) {
         const name = el.getAttribute('name'),
-          container = questionContainer(el);
-        if (name)
+          container = choiceGroup(el);
+        if (name && el instanceof HTMLInputElement)
           elements = controls.filter(
             (other) =>
               getType(other) === type &&
+              other instanceof HTMLInputElement &&
               other.getAttribute('name') === name &&
               other.getRootNode() === el.getRootNode() &&
               (other as HTMLInputElement).form === (el as HTMLInputElement).form,
           );
         else if (container)
           elements = controls.filter(
-            (other) => getType(other) === type && questionContainer(other) === container,
+            (other) => getType(other) === type && choiceGroup(other) === container,
           );
       }
       elements.forEach((e) => visited.add(e));
@@ -218,21 +264,25 @@ export class FormDetector {
         optionNodes = elements;
         options = elements.map((e, index) => ({
           id: `o${index}`,
-          label: labelled(e) || text(e) || (e as HTMLInputElement).value || '',
-          value: e.getAttribute('value') || String(index),
+          label: choiceLabel(e),
+          value:
+            e.getAttribute('data-answer-value') ||
+            e.getAttribute('data-value') ||
+            e.getAttribute('value') ||
+            String(index),
         }));
       } else if (type === 'select') {
         const root = rootOf(el);
         const owned = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
         const list = owned ? root.getElementById(owned) : el;
-        optionNodes = [...(list?.querySelectorAll<HTMLElement>('[role="option"]') || [])];
-        options = optionNodes
-          .filter((o) => o.getAttribute('aria-disabled') !== 'true')
-          .map((o, index) => ({
-            id: `o${index}`,
-            label: text(o),
-            value: o.getAttribute('data-value') || text(o),
-          }));
+        optionNodes = [...(list?.querySelectorAll<HTMLElement>('[role="option"]') || [])].filter(
+          (o) => o.getAttribute('aria-disabled') !== 'true' && !isPlaceholder(text(o)),
+        );
+        options = optionNodes.map((o, index) => ({
+          id: `o${index}`,
+          label: text(o),
+          value: o.getAttribute('data-value') || text(o),
+        }));
       }
       const name = el.getAttribute('name') || el.id;
       const heading = text(
@@ -258,7 +308,9 @@ export class FormDetector {
         required:
           elements.some(
             (e) => e.hasAttribute('required') || e.getAttribute('aria-required') === 'true',
-          ) || /\*\s*$/.test(label),
+          ) ||
+          !!el.closest('[aria-required="true"]') ||
+          /\*\s*$/.test(rawQuestionLabel(el, type === 'radio' || type === 'checkbox')),
         name,
         autocomplete: el.getAttribute('autocomplete') || '',
         context,
@@ -317,7 +369,7 @@ export class FormDetector {
         el instanceof HTMLSelectElement
           ? [...el.options].filter((o) => !o.disabled && !!o.value).map((o) => o.text.trim())
           : q.type === 'radio' || q.type === 'checkbox'
-            ? elements.map((e) => labelled(e) || text(e) || (e as HTMLInputElement).value || '')
+            ? elements.map(choiceLabel)
             : options.map((o) => text(o));
       if (now.length !== q.options.length || now.some((label, i) => label !== q.options[i].label))
         return failure('Available choices changed. Scan again.');
@@ -352,7 +404,10 @@ export class FormDetector {
             node instanceof HTMLInputElement
               ? node.checked
               : node.getAttribute('aria-checked') === 'true';
-          if (wanted !== checked) node.click();
+          if (wanted !== checked) {
+            node.focus({ preventScroll: true });
+            node.click();
+          }
         }
       } else if (q.type === 'select') {
         const index = q.options.findIndex((o) => normalize(o.label) === normalize(value));
@@ -387,11 +442,11 @@ export class FormDetector {
         el.textContent = value;
         fire(el);
       } else return failure('Unsupported custom control.');
-      await delay(160);
-      const after = currentValue(elements, q.type);
+      await delay(80);
+      let after = currentValue(elements, q.type);
       const expected =
         q.type === 'checkbox' ? values.map(normalize).sort().join('|') : normalize(value);
-      const actual =
+      const readActual = () =>
         q.type === 'checkbox'
           ? elements[0] instanceof HTMLSelectElement
             ? [...elements[0].selectedOptions]
@@ -404,10 +459,17 @@ export class FormDetector {
                     ? e.checked
                     : e.getAttribute('aria-checked') === 'true',
                 )
-                .map((e) => normalize(labelled(e) || text(e)))
+                .map((e) => normalize(choiceLabel(e)))
                 .sort()
                 .join('|')
-          : normalize(after);
+          : normalize(currentValue(elements, q.type));
+      let actual = readActual();
+      for (let attempt = 0; actual !== expected && attempt < 10; attempt++) {
+        await delay(70);
+        if (!el.isConnected) return failure('The page changed while verifying the answer.');
+        actual = readActual();
+      }
+      after = currentValue(elements, q.type);
       if (actual !== expected)
         return failure('The website did not retain the answer. Please review.');
       q.currentValue = after;

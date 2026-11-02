@@ -37,7 +37,7 @@ No test sends billable API requests. Automated provider responses and Chrome orc
 10. Add a dynamic field, expand a lazy section and change an SPA route. Run again. Previously completed fields stay preserved by default; newly accessible fields are discovered.
 11. Open Activity, review a suggestion, apply it, confirm and save it. Navigate/reload the original page and ensure an old report cannot fill new document IDs.
 12. Cancel during AI generation. Close/reopen the popup during a run. Verify the report remains available in Activity after normal completion.
-13. Export data and inspect it for the expected personal records and **no API keys**. Clear Activity; reset the vault; delete all data and confirm the corresponding stores are empty.
+13. Export a complete backup: inspect providers, model/endpoint/order/preferences, profiles, answers, reports/logs and encrypted vault bytes. Confirm no readable keys appear by default. Unlock the vault, explicitly choose readable-key export, confirm the warning and verify that only this opted-in file contains readable keys. Restore the encrypted backup, unlock with its original passphrase and retest a provider. Clear Activity; reset the vault; delete all data and confirm the corresponding stores are empty.
 14. Repeat representative native/ARIA flows in Google Forms, Microsoft Forms, a Workday application and LinkedIn Easy Apply using accounts you control. Document regressions; vendor DOMs change frequently.
 
 ## Browser limitations
@@ -45,3 +45,7 @@ No test sends billable API requests. Automated provider responses and Chrome orc
 Chrome system pages and the Chrome Web Store cannot run these content scripts. Incognito needs separate user permission; file pages are not supported by content-script match patterns. Cross-origin frames require granted host permissions; restricted/sandboxed frames may remain unavailable. Closed shadow DOM, inaccessible custom controls, canvas forms and CAPTCHAs require manual action. The extension never attempts to circumvent those boundaries.
 
 Before public distribution, perform the installed-extension tests, obtain provider account/model compatibility results, review privacy disclosures/permissions, check accessibility and contrast, and complete Chrome Web Store policy review. Passing local tests is not a substitute for that review.
+
+## 1.0.1 regression coverage
+
+Additional automated tests cover full versus base API URLs, Gemini `models/` prefixes, real fast-404 request dispatch, atomic key persistence across lock/unlock and UI reload, blank-key model edits, concurrent provider saves, complete backup round trips and rollback, stale key metadata, transparent native choice inputs, Google Forms-style delayed ARIA radios/checkboxes/grid rows/closed dropdowns, missing content-script recovery, short popup viewports and provider dialogs from 320×480 through 1366×768. The provider UI workflow uses the real background router/vault/provider modules with emulated Chrome storage/messaging and intercepted HTTP; it does not use real account credentials or constitute an installed-extension certification.

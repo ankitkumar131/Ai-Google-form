@@ -11,12 +11,16 @@ export function Providers({ state, update, notify }: PageProps) {
     [passphrase, setPassphrase] = useState(''),
     [busy, setBusy] = useState(false),
     [test, setTest] = useState(''),
-    [vault, setVault] = useState(false);
+    [vault, setVault] = useState(false),
+    [formError, setFormError] = useState(''),
+    [testing, setTesting] = useState(false);
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
+    setFormError('');
     try {
       await fn();
     } catch (e) {
+      setFormError((e as Error).message);
       notify((e as Error).message);
     } finally {
       setBusy(false);
@@ -40,13 +44,13 @@ export function Providers({ state, update, notify }: PageProps) {
       providerSchema.parse(editing);
       if (key && !state.vaultUnlocked)
         throw new Error('Unlock your vault before saving an API key.');
-      await update('SAVE_PROVIDERS', {
-        providers: state.providers.map((p) => (p.id === editing.id ? editing : p)),
+      await update('SAVE_PROVIDER', {
+        provider: editing,
+        ...(key.trim() ? { key: key.trim() } : {}),
       });
-      if (key) await update('SET_KEY', { id: editing.id, key });
       setKey('');
       setEditing(null);
-      notify('Provider configuration saved.');
+      notify('Provider configuration and saved API key verified.');
     });
   };
   return (
@@ -141,7 +145,7 @@ export function Providers({ state, update, notify }: PageProps) {
               onChange={(enabled) => {
                 if (enabled && (!p.hasKey || !p.model || !p.endpoint)) {
                   notify('Configure a model, endpoint and API key first.');
-                  setEditing({ ...p });
+                  setEditing({ ...p, enabled: p.hasKey ? p.enabled : true });
                   return;
                 }
                 void run(() =>
@@ -154,9 +158,10 @@ export function Providers({ state, update, notify }: PageProps) {
             <Button
               variant="outline"
               onClick={() => {
-                setEditing({ ...p });
+                setEditing({ ...p, enabled: p.hasKey ? p.enabled : true });
                 setKey('');
                 setTest('');
+                setFormError('');
               }}
             >
               Configure <ArrowUpRight size={14} />
@@ -211,6 +216,11 @@ export function Providers({ state, update, notify }: PageProps) {
               Keep it somewhere safe. There is no passphrase recovery. Local encryption does not
               protect against a compromised browser or device.
             </p>
+            {formError && (
+              <div role="alert" className="notice danger compact">
+                {formError}
+              </div>
+            )}
             <div className="modal-actions">
               <Button variant="outline" onClick={() => setVault(false)}>
                 Cancel
@@ -247,13 +257,13 @@ export function Providers({ state, update, notify }: PageProps) {
                 />
               </label>
               <label className="field span-2">
-                API base endpoint
+                API endpoint (base or full operation URL)
                 <input
                   type="url"
                   required
                   value={editing.endpoint}
                   onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })}
-                  placeholder="https://api.example.com/v1"
+                  placeholder="https://api.example.com/v1 or …/chat/completions"
                 />
               </label>
               <label className="field span-2">
@@ -269,6 +279,27 @@ export function Providers({ state, update, notify }: PageProps) {
                   }
                 />
               </label>
+              <p className="form-note span-2">
+                {editing.hasKey
+                  ? 'An API key is already saved in your encrypted vault. The blank box does not mean it was deleted. Leave it blank to keep that key.'
+                  : 'Paste a key, then Save configuration or Save & test. Both persist the key securely.'}
+              </p>
+              {!state.vaultUnlocked && (
+                <div className="span-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setFormError('');
+                      setVault(true);
+                    }}
+                  >
+                    <LockKeyhole size={14} />
+                    {state.vaultConfigured
+                      ? 'Unlock vault to add or test keys'
+                      : 'Set up vault to save API keys'}
+                  </Button>
+                </div>
+              )}
               <label className="field">
                 Timeout (seconds)
                 <input
@@ -312,6 +343,11 @@ export function Providers({ state, update, notify }: PageProps) {
                 Non-HTTPS endpoints and redirects are rejected.
               </span>
             </div>
+            {formError && (
+              <div role="alert" className="notice danger compact">
+                {formError}
+              </div>
+            )}
             {test && (
               <p className="test-result" role="status">
                 {test}
@@ -320,19 +356,38 @@ export function Providers({ state, update, notify }: PageProps) {
             <div className="modal-actions">
               <Button
                 variant="outline"
-                disabled={busy || !editing.hasKey || !state.vaultUnlocked}
+                disabled={busy || (!editing.hasKey && !key.trim()) || !state.vaultUnlocked}
                 onClick={() =>
                   void run(async () => {
-                    setTest('Testing…');
+                    setTesting(true);
+                    setTest('Saving configuration and contacting provider…');
                     try {
-                      setTest(await request<string>('TEST_PROVIDER', { provider: editing }));
-                    } catch (e) {
-                      setTest((e as Error).message);
+                      const result = await request<{
+                        message: string;
+                        requestUrl: string;
+                        model: string;
+                        durationMs: number;
+                      }>('TEST_PROVIDER', {
+                        provider: editing,
+                        ...(key.trim() ? { key: key.trim() } : {}),
+                        save: true,
+                      });
+                      setKey('');
+                      setEditing({ ...editing, hasKey: true });
+                      setTest(
+                        `${result.message} ${result.durationMs} ms · ${result.model} · POST ${result.requestUrl}`,
+                      );
+                      await update('STATE', {});
+                    } catch (error) {
+                      setTest('');
+                      throw error;
+                    } finally {
+                      setTesting(false);
                     }
                   })
                 }
               >
-                Test connection
+                {testing ? <Busy label="Contacting provider…" /> : 'Save & test connection'}
               </Button>
               <Button type="submit" disabled={busy}>
                 {busy ? <Busy /> : 'Save configuration'}

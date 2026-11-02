@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { profileSchema, providerSchema, savedAnswerSchema, settingsSchema } from '../shared/schema';
 import { loadState, saveReport } from '../services/storage';
 import { memory, reports } from '../services/memory';
-import { getKeys, lockVault, setKey, unlockVault } from '../services/vault';
-import { queryProvider, validateEndpoint } from '../services/providers';
+import { getKeys, lockVault, unlockVault } from '../services/vault';
+import { queryProvider, providerRequestUrl, normalizeProvider } from '../services/providers';
 import {
   beginDataReset,
   endDataReset,
@@ -13,6 +13,12 @@ import {
   runAll,
   scanTab,
 } from './runner';
+import { createBackup, restoreBackup } from '../services/backup';
+import {
+  saveProviderConfiguration,
+  saveProviderOrder,
+  removeProviderKey,
+} from '../services/provider-config';
 import type { Answer } from '../shared/types';
 const secureStorage = Promise.all([
   chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
@@ -68,24 +74,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         });
         return loadState();
       }
-      case 'SAVE_PROVIDERS': {
-        const providers = z.array(providerSchema).length(7).parse(message.providers);
-        if (new Set(providers.map((p) => p.id)).size !== 7)
-          throw new Error('Provider IDs must be unique.');
-        for (const p of providers) {
-          if (p.endpoint) validateEndpoint(p.endpoint);
-          if (p.enabled && (!p.model || !p.endpoint))
-            throw new Error('Enabled providers need a model and endpoint.');
-        }
-        const s = await loadState();
-        await chrome.storage.local.set({
-          providers: providers.map((p) => ({
-            ...p,
-            hasKey: s.providers.find((x) => x.id === p.id)?.hasKey || false,
-          })),
-        });
+      case 'SAVE_PROVIDERS':
+        await saveProviderOrder(message.providers);
         return loadState();
-      }
+      case 'SAVE_PROVIDER':
+        await saveProviderConfiguration(
+          message.provider,
+          message.key === undefined ? undefined : z.string().max(2000).parse(message.key),
+        );
+        return loadState();
       case 'UNLOCK':
         await unlockVault(z.string().max(1000).parse(message.passphrase));
         return loadState();
@@ -94,20 +91,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         await lockVault();
         return loadState();
       case 'SET_KEY': {
-        const id = providerSchema.shape.id.parse(message.id);
-        await setKey(id, z.string().max(2000).parse(message.key));
-        const s = await loadState();
-        await chrome.storage.local.set({
-          providers: s.providers.map((p) =>
-            p.id === id
-              ? {
-                  ...p,
-                  hasKey: !!message.key.trim(),
-                  enabled: message.key.trim() ? p.enabled : false,
-                }
-              : p,
-          ),
-        });
+        const id = providerSchema.shape.id.parse(message.id),
+          key = z.string().max(2000).parse(message.key);
+        if (key.trim()) {
+          const s = await loadState();
+          await saveProviderConfiguration(
+            s.providers.find((p) => p.id === id),
+            key,
+          );
+        } else await removeProviderKey(id);
         return loadState();
       }
       case 'RESET_VAULT': {
@@ -121,25 +113,49 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         return loadState();
       }
       case 'TEST_PROVIDER': {
-        const p = providerSchema.parse(message.provider);
+        const started = performance.now();
+        const candidate = normalizeProvider(providerSchema.parse(message.provider));
+        if (!candidate.model || !candidate.endpoint)
+          throw new Error('Enter a model and API endpoint before testing.');
+        const p =
+          message.save === true
+            ? await saveProviderConfiguration(
+                candidate,
+                message.key === undefined ? undefined : z.string().max(2000).parse(message.key),
+              )
+            : candidate;
         const keys = await getKeys();
-        if (!keys[p.id]) throw new Error('Save an API key first.');
-        await queryProvider(p, keys[p.id], [
-          {
-            id: 'test',
-            frameId: 0,
-            text: 'What is 2 + 2?',
-            type: 'text',
-            options: [],
-            required: false,
-            context: 'Connection test',
-            name: '',
-            autocomplete: '',
-            currentValue: '',
-            sensitive: false,
-          },
-        ]);
-        return 'Connected. API access and structured answers verified.';
+        if (!keys[p.id])
+          throw new Error('No saved API key for this provider. Add a key and use Save & test.');
+        const url = providerRequestUrl(p);
+        try {
+          await queryProvider(p, keys[p.id], [
+            {
+              id: 'test',
+              frameId: 0,
+              text: 'What is 2 + 2?',
+              type: 'text',
+              options: [],
+              required: false,
+              context: 'Connection test',
+              name: '',
+              autocomplete: '',
+              currentValue: '',
+              sensitive: false,
+            },
+          ]);
+        } catch (error) {
+          throw new Error(
+            `${message.save === true ? 'Settings and API key are saved. Connection test failed. ' : ''}${error instanceof Error ? error.message : 'Connection failed.'} (${Math.round(performance.now() - started)} ms)`,
+          );
+        }
+        return {
+          message: 'Connected. Saved key, model access and structured answers verified.',
+          provider: p.name,
+          model: p.model,
+          requestUrl: url,
+          durationMs: Math.round(performance.now() - started),
+        };
       }
       case 'BANK_LIST':
         return memory.list();
@@ -200,14 +216,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
           endDataReset();
         }
       }
-      case 'EXPORT': {
-        const s = await loadState();
-        return {
-          version: 1,
-          profiles: s.profiles,
-          settings: s.settings,
-          answers: await memory.list(),
-        };
+      case 'EXPORT':
+        return createBackup(message.includePlaintextKeys === true);
+      case 'IMPORT_BACKUP': {
+        beginDataReset();
+        try {
+          return await restoreBackup(message.backup);
+        } finally {
+          endDataReset();
+        }
       }
       default:
         throw new Error('Unknown extension request.');
@@ -215,13 +232,18 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   })()
     .then((data) => respond({ ok: true, data }))
     .catch((error) => {
-      const message =
+      const errorMessage =
         error instanceof z.ZodError
-          ? 'Invalid settings. Check your input values.'
+          ? message.type === 'IMPORT_BACKUP'
+            ? 'Invalid or unsupported backup. Choose a complete FormPilot version 2 backup.'
+            : `Invalid settings: ${error.issues
+                .slice(0, 3)
+                .map((issue) => `${issue.path.join('.') || 'value'}: ${issue.message}`)
+                .join('; ')}`
           : error instanceof Error
             ? error.message
             : 'Operation failed.';
-      respond({ ok: false, error: message });
+      respond({ ok: false, error: errorMessage });
     });
   return true;
 });

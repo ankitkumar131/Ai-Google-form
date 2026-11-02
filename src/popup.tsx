@@ -69,6 +69,9 @@ function Popup() {
   };
   const profile = state.profiles.find((p) => p.id === state.settings.activeProfileId);
   const site = tab?.url && /^https?:/.test(tab.url) ? new URL(tab.url).hostname : '';
+  const aiIssue = report?.results.find((r) =>
+    /No (?:enabled AI provider|provider succeeded)|Unlock your API key vault/.test(r.reason),
+  )?.reason;
   return (
     <div className="popup">
       <header className="popup-header">
@@ -117,6 +120,42 @@ function Popup() {
             {error}
           </div>
         )}
+        {report && (
+          <div className="popup-report" role="status">
+            {aiIssue && (
+              <div role="alert" className="notice danger">
+                {aiIssue}
+              </div>
+            )}
+            <div>
+              <FileCheck2 size={21} />
+              <strong>
+                {report.results.filter((r) => r.status === 'filled').length} filled & verified
+              </strong>
+            </div>
+            <p>
+              {report.results.length} questions detected ·{' '}
+              {report.provider || 'Local matching only'}
+            </p>
+            <p>
+              {report.results.filter((r) => r.status === 'review' || r.status === 'failed').length}{' '}
+              need review · {report.results.filter((r) => r.status === 'skipped').length} preserved
+            </p>
+            <Button variant="outline" className="full" onClick={() => open('activity')}>
+              Review completion report <ArrowUpRight size={14} />
+            </Button>
+          </div>
+        )}
+        <div className="popup-links">
+          <button onClick={() => open('bank')}>
+            <BookOpen size={15} /> Question bank
+          </button>
+          <button onClick={() => open()}>
+            Open dashboard <ArrowUpRight size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="popup-action-area">
         <Button
           className="full popup-answer"
           disabled={busy || !site}
@@ -156,31 +195,6 @@ function Popup() {
         <p className="popup-assurance">
           <CheckCheck size={13} /> Nothing gets submitted. You’re in control.
         </p>
-        {report && (
-          <div className="popup-report" role="status">
-            <div>
-              <FileCheck2 size={21} />
-              <strong>
-                {report.results.filter((r) => r.status === 'filled').length} filled & verified
-              </strong>
-            </div>
-            <p>
-              {report.results.filter((r) => r.status === 'review' || r.status === 'failed').length}{' '}
-              need review · {report.results.filter((r) => r.status === 'skipped').length} preserved
-            </p>
-            <Button variant="outline" className="full" onClick={() => open('activity')}>
-              Review completion report <ArrowUpRight size={14} />
-            </Button>
-          </div>
-        )}
-        <div className="popup-links">
-          <button onClick={() => open('bank')}>
-            <BookOpen size={15} /> Question bank
-          </button>
-          <button onClick={() => open()}>
-            Open dashboard <ArrowUpRight size={14} />
-          </button>
-        </div>
       </div>
       <footer className="popup-footer">
         <ShieldCheck size={12} /> Private by design. Thoughtful by default.
@@ -188,4 +202,5 @@ function Popup() {
     </div>
   );
 }
+document.body.classList.add('popup-page');
 createRoot(document.getElementById('root')!).render(<Popup />);

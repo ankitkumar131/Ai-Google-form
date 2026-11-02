@@ -147,3 +147,19 @@ describe('Answer all orchestration', () => {
     await expect(runAll(1)).rejects.toThrow('No accessible form fields');
   });
 });
+
+describe('existing-tab content script recovery', () => {
+  it('injects the script on user action if a tab was open before extension installation', async () => {
+    const executeScript = vi.fn(async () => []);
+    Object.assign(chrome, { scripting: { executeScript } });
+    sent.mockRejectedValueOnce(
+      new Error('Could not establish connection. Receiving end does not exist.'),
+    );
+    const result = await scanTab(1);
+    expect(result).toHaveLength(2);
+    expect(executeScript).toHaveBeenCalledWith({
+      target: { tabId: 1, frameIds: [0] },
+      files: ['content.js'],
+    });
+  });
+});

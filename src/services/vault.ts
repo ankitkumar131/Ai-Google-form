@@ -1,5 +1,5 @@
 // This module is bundled ONLY into the trusted background worker.
-interface EncryptedVault {
+export interface EncryptedVault {
   salt: number[];
   iv: number[];
   data: number[];
@@ -66,7 +66,7 @@ export async function getKeys(): Promise<Record<string, string>> {
   if (!vault) return {};
   return decrypt(await sessionKey(), vault);
 }
-export async function setKey(id: string, value: string) {
+export async function prepareKeyUpdate(id: string, value: string): Promise<EncryptedVault> {
   const key = await sessionKey();
   const { vault } = await chrome.storage.local.get('vault');
   const keys = await decrypt(key, vault);
@@ -78,9 +78,10 @@ export async function setKey(id: string, value: string) {
     key,
     encoder.encode(JSON.stringify(keys)),
   );
-  await chrome.storage.local.set({
-    vault: { salt: vault.salt, iv: [...iv], data: [...new Uint8Array(data)] },
-  });
+  return { salt: vault.salt, iv: [...iv], data: [...new Uint8Array(data)] };
+}
+export async function setKey(id: string, value: string) {
+  await chrome.storage.local.set({ vault: await prepareKeyUpdate(id, value) });
 }
 export async function lockVault() {
   await chrome.storage.session.remove('vaultKey');

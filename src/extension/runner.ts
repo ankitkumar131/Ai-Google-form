@@ -32,11 +32,27 @@ export async function scanTab(tabId: number): Promise<Question[]> {
   const groups = await Promise.all(
     frames.map(async (frame) => {
       try {
-        const response = await chrome.tabs.sendMessage(
-          tabId,
-          { type: 'FP_SCAN' },
-          { frameId: frame.frameId },
-        );
+        let response;
+        try {
+          response = await chrome.tabs.sendMessage(
+            tabId,
+            { type: 'FP_SCAN' },
+            { frameId: frame.frameId },
+          );
+        } catch {
+          // Existing tabs do not receive declarative scripts after installation.
+          // Recover on user action instead of requiring a manual page reload.
+          if (!chrome.scripting?.executeScript) throw new Error('Content script unavailable.');
+          await chrome.scripting.executeScript({
+            target: { tabId, frameIds: [frame.frameId] },
+            files: ['content.js'],
+          });
+          response = await chrome.tabs.sendMessage(
+            tabId,
+            { type: 'FP_SCAN' },
+            { frameId: frame.frameId },
+          );
+        }
         if (!response?.questions) return [];
         return (response.questions as Question[]).map((q) => ({
           ...q,

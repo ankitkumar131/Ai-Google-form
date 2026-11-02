@@ -1,3 +1,5 @@
+import { backupSchema } from '../shared/backup';
+import { normalizeProvider } from '../services/providers';
 import { initialState } from '../shared/defaults';
 import type { AppState, SavedAnswer } from '../shared/types';
 export const isExtension = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
@@ -45,6 +47,12 @@ export async function request<T = AppState>(
     case 'SAVE_SETTINGS':
       s.settings = payload.settings as AppState['settings'];
       break;
+    case 'SAVE_PROVIDER': {
+      if (payload.key) throw new Error('API keys can only be saved in the installed extension.');
+      const provider = normalizeProvider(payload.provider as AppState['providers'][number]);
+      s.providers = s.providers.map((p) => (p.id === provider.id ? provider : p));
+      break;
+    }
     case 'SAVE_PROVIDERS':
       s.providers = payload.providers as AppState['providers'];
       break;
@@ -69,7 +77,34 @@ export async function request<T = AppState>(
       localStorage.removeItem(`${PREVIEW_KEY}-bank`);
       return initialState() as T;
     case 'EXPORT':
-      return { version: 1, profiles: s.profiles, settings: s.settings, answers: bank } as T;
+      return {
+        format: 'formpilot-backup',
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        profiles: s.profiles,
+        providers: s.providers,
+        settings: s.settings,
+        answers: bank,
+        history: s.history,
+        failures: s.failures,
+        vault: null,
+      } as T;
+    case 'IMPORT_BACKUP': {
+      const backup = backupSchema.parse(payload.backup);
+      if (backup.vault || Object.keys(backup.apiKeys || {}).length)
+        throw new Error(
+          'Backups containing API keys must be restored in the installed extension, not the web preview.',
+        );
+      Object.assign(s, {
+        profiles: backup.profiles,
+        providers: backup.providers,
+        settings: backup.settings,
+        history: backup.history,
+        failures: backup.failures,
+      });
+      localStorage.setItem(`${PREVIEW_KEY}-bank`, JSON.stringify(backup.answers));
+      break;
+    }
     default:
       throw new Error(
         'This action needs the installed Chrome extension. API keys and website access are disabled in the web preview.',

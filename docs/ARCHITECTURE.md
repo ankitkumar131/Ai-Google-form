@@ -4,7 +4,7 @@
 
 ```text
 React popup / dashboard (trusted extension pages)
-  │ typed request envelope, no secrets returned
+  │ typed request envelope; no keys in routine state responses
   ▼
 MV3 background worker
   ├─ sender validation + Zod request validation
@@ -29,6 +29,8 @@ The extension UI is compiled by Vite. `scripts/build-extension.mjs` uses esbuild
 
 - `src/shared/`: entities, default providers, profile fields and Zod validation.
 - `src/services/profile.ts`: field-description matching, relevant fact selection, normalized exact memory reuse and token-based search similarity.
+- `src/services/provider-config.ts`: serialized, atomic configuration + encrypted-key writes, blank-key preservation and persisted-key verification.
+- `src/services/backup.ts` / `src/shared/backup.ts`: complete version-2 export/import, encrypted vault by default, explicitly authorized readable-key export, schema validation and rollback.
 - `src/services/vault.ts`: background-only encryption, unlock, lock and key updates.
 - `src/services/providers.ts`: OpenAI-compatible, Anthropic and Gemini wire formats; prompt construction; strict response parsing; bounded retry/fallback.
 - `src/services/memory.ts`: transaction-complete IndexedDB access, separate `answers` and `reports` stores.
@@ -63,3 +65,7 @@ IndexedDB retains at most 20 run reports. Failure logs retain 50 sanitized recor
 ## Why no automatic semantic reuse?
 
 Token overlap alone loses negation and word order (“move from Pune to Mumbai” versus the reverse). The Question bank uses similarity for discovery/search, but only normalized exact wording (with an optional leading “please”) is eligible for automatic reuse. User confirmation remains the trust boundary. Embedding retrieval could later suggest more matches without silently applying them.
+
+## Complete backups
+
+A backup contains profiles, providers, preferences, saved answers, reports, failure logs and encrypted vault bytes. Optional readable keys require explicit UI consent and an unlocked vault. Neither the passphrase nor the derived session unlock key is exported. Provider writes and backup snapshots/restores share a serialized lock. Restore validates all references before writes, replaces answers/reports atomically in IndexedDB, compensates persistent-store failures with the previous snapshot, and locks the imported vault.

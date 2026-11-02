@@ -1,10 +1,21 @@
 import { useState } from 'react';
-import { CheckCheck, Download, Globe2, LockKeyhole, ShieldCheck, Trash2 } from 'lucide-react';
-import { download, request } from '../bridge';
-import { Button, SectionHead, Toggle } from '../components';
+import {
+  CheckCheck,
+  Download,
+  Globe2,
+  LockKeyhole,
+  ShieldCheck,
+  Trash2,
+  Upload,
+} from 'lucide-react';
+import { download, request, isExtension } from '../bridge';
+import { Button, SectionHead, Toggle, Modal, Busy } from '../components';
 import type { PageProps } from '../types';
 export function SettingsPage({ state, update, notify, refresh }: PageProps) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false),
+    [exportOpen, setExportOpen] = useState(false),
+    [readableKeys, setReadableKeys] = useState(false),
+    [backupError, setBackupError] = useState('');
   const set = (key: string, value: unknown) =>
     void update(
       'SAVE_SETTINGS',
@@ -108,26 +119,82 @@ export function SettingsPage({ state, update, notify, refresh }: PageProps) {
         </div>
         <div className="setting-row">
           <div>
-            <strong>Export your data</strong>
+            <strong>Complete extension backup</strong>
             <p>
-              Profiles and confirmed answers. Never API keys. The file contains personal
-              information—keep it private.
+              All profiles, provider models/endpoints/priority, preferences, saved answers, activity
+              and API keys. Keys stay encrypted by default; keep the vault passphrase to restore
+              them.
             </p>
           </div>
           <Button
             variant="outline"
-            onClick={async () => {
-              try {
-                download('formpilot-private-backup.json', await request('EXPORT'));
-                notify('Private backup downloaded.');
-              } catch (e) {
-                notify((e as Error).message);
-              }
+            onClick={() => {
+              setBackupError('');
+              setReadableKeys(false);
+              setExportOpen(true);
             }}
           >
-            <Download size={15} /> Export
+            <Download size={15} /> Export everything
           </Button>
         </div>
+        <div className="setting-row">
+          <div>
+            <strong>Restore a complete backup</strong>
+            <p>
+              Replaces existing settings, profiles, answers, activity and API vault. You will unlock
+              imported keys with the original vault passphrase.
+            </p>
+          </div>
+          <label className="button outline backup-upload">
+            <Upload size={15} />
+            {busy ? 'Restoring…' : 'Import backup'}
+            <input
+              aria-label="Import backup file"
+              type="file"
+              accept=".json,application/json"
+              disabled={busy}
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (!file) return;
+                setBackupError('');
+                if (file.size > 20 * 1024 * 1024) {
+                  setBackupError('Choose a backup smaller than 20 MB.');
+                  return;
+                }
+                if (
+                  !confirm(
+                    'Replace all existing FormPilot settings, profiles, answers, activity and API keys with this backup?',
+                  )
+                )
+                  return;
+                setBusy(true);
+                try {
+                  const backup = JSON.parse(await file.text());
+                  await update(
+                    'IMPORT_BACKUP',
+                    { backup },
+                    'Complete backup restored. Unlock the imported vault with its original passphrase.',
+                  );
+                  await refresh();
+                } catch (error) {
+                  setBackupError(
+                    error instanceof SyntaxError
+                      ? 'This file is not valid JSON.'
+                      : (error as Error).message,
+                  );
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+          </label>
+        </div>
+        {backupError && !exportOpen && (
+          <div role="alert" className="notice danger">
+            {backupError}
+          </div>
+        )}
         <div className="setting-row">
           <div>
             <strong>Reset API vault</strong>
@@ -186,6 +253,87 @@ export function SettingsPage({ state, update, notify, refresh }: PageProps) {
           </Button>
         </div>
       </section>
+      {exportOpen && (
+        <Modal title="Export complete extension settings" onClose={() => setExportOpen(false)}>
+          <p className="muted">
+            Includes every profile, provider configuration and priority, preference, confirmed
+            answer, activity report and connection log. Your encrypted API-key vault is included,
+            even when locked.
+          </p>
+          <div className="notice compact">
+            <LockKeyhole size={18} />
+            <span>
+              Keep your vault passphrase. It is not exported. On restore, use it to unlock the saved
+              API keys. Browser-session unlock tokens are deliberately excluded.
+            </span>
+          </div>
+          <label className="export-secret-option">
+            <input
+              type="checkbox"
+              checked={readableKeys}
+              disabled={!isExtension || !state.vaultUnlocked}
+              onChange={(e) => setReadableKeys(e.target.checked)}
+            />
+            <span>Also include readable API keys (sensitive)</span>
+          </label>
+          {!state.vaultUnlocked && (
+            <p className="form-note">
+              Unlock the vault in AI providers first if you also want readable keys. The normal
+              encrypted backup already contains the complete keys.
+            </p>
+          )}
+          {readableKeys && (
+            <div className="notice danger compact">
+              Anyone with this JSON file will be able to read and use your API keys. Do not upload
+              it to GitHub or share it.
+            </div>
+          )}
+          {backupError && (
+            <div role="alert" className="notice danger compact">
+              {backupError}
+            </div>
+          )}
+          <div className="modal-actions">
+            <Button variant="outline" onClick={() => setExportOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={async () => {
+                if (
+                  readableKeys &&
+                  !confirm(
+                    'Export readable API keys? Anyone who receives the file can use your provider accounts.',
+                  )
+                )
+                  return;
+                setBusy(true);
+                setBackupError('');
+                try {
+                  download(
+                    'formpilot-complete-backup.json',
+                    await request('EXPORT', { includePlaintextKeys: readableKeys }),
+                  );
+                  notify('Complete extension backup downloaded.');
+                  setExportOpen(false);
+                } catch (e) {
+                  setBackupError((e as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? (
+                <Busy />
+              ) : (
+                <>
+                  <Download size={15} /> Download complete backup
+                </>
+              )}
+            </Button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -55,7 +55,7 @@ export const profileSchema = z
     name: z.string().min(1).max(100),
     mandatory: z.array(z.string()).max(40),
   })
-  .catchall(z.union([z.string().max(100000), z.array(z.string())]));
+  .catchall(z.union([z.string().max(100000), z.array(z.string())]).optional());
 export const savedAnswerSchema = z.object({
   id: z.string().max(100),
   question: z.string().min(1).max(4000),

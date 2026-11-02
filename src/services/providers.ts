@@ -13,7 +13,61 @@ export function validateEndpoint(endpoint: string): string {
     throw new Error('API endpoints must use HTTPS with no credentials, query or fragment.');
   return url.toString().replace(/\/$/, '');
 }
+/** Accept either a base URL or the full operation URL copied from provider docs. */
+export function normalizeProvider(input: Provider): Provider {
+  const p = { ...input, model: input.model.trim(), endpoint: input.endpoint.trim() };
+  if (p.id === 'gemini') p.model = p.model.replace(/^models\//, '');
+  if (!p.endpoint) return p;
+  let base = validateEndpoint(p.endpoint);
+  if (p.id === 'gemini') base = base.replace(/\/models(?:\/[^/]+(?::generateContent)?)?$/i, '');
+  else if (p.id === 'anthropic') base = base.replace(/\/messages$/i, '');
+  else base = base.replace(/\/chat\/completions$/i, '');
+  const url = new URL(base);
+  if (url.pathname === '/' || url.pathname === '') {
+    const paths: Record<string, string> = {
+      'api.openai.com': '/v1',
+      'api.anthropic.com': '/v1',
+      'generativelanguage.googleapis.com': '/v1beta',
+      'openrouter.ai': '/api/v1',
+      'api.groq.com': '/openai/v1',
+      'api.deepseek.com': '',
+    };
+    if (paths[url.hostname] !== undefined) base = url.origin + paths[url.hostname];
+  }
+  if (p.id === 'gemini' && !p.model)
+    throw new Error('Enter the Gemini model ID, for example gemini-2.5-flash.');
+  if (/\/responses$/i.test(base))
+    throw new Error(
+      'This adapter uses Chat Completions. Use an API base URL or a /chat/completions endpoint, not /responses.',
+    );
+  return { ...p, endpoint: base };
+}
+export function providerRequestUrl(provider: Provider): string {
+  const p = normalizeProvider(provider),
+    base = validateEndpoint(p.endpoint);
+  return p.id === 'anthropic'
+    ? `${base}/messages`
+    : p.id === 'gemini'
+      ? `${base}/models/${encodeURIComponent(p.model)}:generateContent`
+      : `${base}/chat/completions`;
+}
+function httpFailure(status: number, url: string): string {
+  const hint =
+    status === 404
+      ? 'Endpoint or model not found. Check the API URL and model ID.'
+      : status === 401
+        ? 'API key was rejected. Check the saved key.'
+        : status === 403
+          ? 'Access denied. Check model access and account permissions.'
+          : status === 429
+            ? 'Rate limit or quota reached. Check your provider billing and usage.'
+            : status === 400
+              ? 'The provider rejected the model or request parameters.'
+              : 'The provider could not complete this request.';
+  return `HTTP ${status}: ${hint} Request: POST ${url}`;
+}
 function requestFor(p: Provider, key: string, questions: Question[], profile?: Profile) {
+  p = normalizeProvider(p);
   const base = validateEndpoint(p.endpoint);
   const data = JSON.stringify({
     questions: questions.map(({ id, text, type, options, context, required, constraints }) => ({
@@ -99,6 +153,7 @@ export async function queryProvider(
   profile?: Profile,
   signal?: AbortSignal,
 ): Promise<Answer[]> {
+  p = normalizeProvider(p);
   const controller = new AbortController();
   let timedOut = false;
   const abort = () => controller.abort();
@@ -120,7 +175,7 @@ export async function queryProvider(
     });
     if (!response.ok)
       throw new ProviderError(
-        `HTTP ${response.status}`,
+        httpFailure(response.status, req.url),
         response.status === 429 || response.status >= 500,
       );
     const payload = await response.json();
@@ -159,9 +214,14 @@ export async function withFallback(
   log: (failure: Failure) => Promise<void>,
   signal?: AbortSignal,
 ): Promise<{ answers: Answer[]; provider: string }> {
-  for (const p of [...providers]
+  const available = [...providers]
     .filter((p) => p.enabled && keys[p.id])
-    .sort((a, b) => a.priority - b.priority)) {
+    .sort((a, b) => a.priority - b.priority);
+  if (!available.length)
+    throw new Error(
+      'No enabled AI provider with a saved API key. Enable a configured provider in AI providers.',
+    );
+  for (const p of available) {
     for (let attempt = 0; attempt <= p.retries; attempt++) {
       try {
         return {

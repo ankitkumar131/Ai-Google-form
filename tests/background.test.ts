@@ -5,6 +5,10 @@ vi.mock('../src/services/memory', () => ({
   memory: { list: vi.fn(async () => []) },
   reports: { list: vi.fn(async () => []) },
 }));
+vi.mock('../src/services/vault', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/services/vault')>()),
+  getKeys: vi.fn(async () => ({ openai: 'private-session-secret' })),
+}));
 type Reply = { ok: boolean; data?: Record<string, unknown>; error?: string };
 let handler: (
   message: Record<string, unknown>,

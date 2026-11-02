@@ -86,3 +86,86 @@ test('mobile navigation works without horizontal overflow', async ({ page }) => 
   await page.getByRole('button', { name: 'Close dialog' }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
 });
+
+for (const size of [
+  { width: 320, height: 480 },
+  { width: 480, height: 320 },
+  { width: 768, height: 432 },
+  { width: 1024, height: 600 },
+  { width: 1366, height: 768 },
+]) {
+  test(`provider settings stay reachable at ${size.width}×${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('/#providers');
+    await expect(page.getByRole('heading', { name: 'AI providers', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.locator('.provider-card').first().getByRole('button', { name: 'Configure' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    const save = dialog.getByRole('button', { name: 'Save configuration', exact: true });
+    await save.scrollIntoViewIfNeeded();
+    await expect(save).toBeInViewport();
+    const box = await dialog.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(size.width);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(size.height);
+    await dialog.getByRole('button', { name: 'Close dialog' }).click();
+  });
+}
+for (const size of [
+  { width: 320, height: 320 },
+  { width: 384, height: 480 },
+  { width: 384, height: 600 },
+]) {
+  test(`popup keeps its actions visible and content scrollable at ${size.width}×${size.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(size);
+    await page.goto('/popup.html');
+    await expect(page.getByRole('button', { name: 'Answer all', exact: true })).toBeInViewport();
+    await expect(page.locator('.popup-footer')).toBeInViewport();
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <= innerWidth &&
+          document.documentElement.scrollHeight <= innerHeight,
+      ),
+    ).toBe(true);
+    await page.locator('.popup-content').evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(page.getByRole('button', { name: 'Open dashboard' })).toBeInViewport();
+  });
+}
+test('complete export/import includes provider configuration and restores settings', async ({
+  page,
+}) => {
+  await page.goto('/#settings');
+  await page.getByLabel('Minimum AI confidence').selectOption('0.95');
+  await page.getByRole('button', { name: 'Export everything' }).click();
+  const modal = page.getByRole('dialog');
+  await expect(modal).toContainText('encrypted API-key vault');
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    modal.getByRole('button', { name: 'Download complete backup' }).click(),
+  ]);
+  const file = await download.path();
+  expect(file).toBeTruthy();
+  const fs = await import('node:fs/promises');
+  const backup = JSON.parse(await fs.readFile(file!, 'utf8'));
+  expect(backup.version).toBe(2);
+  expect(backup.providers).toHaveLength(7);
+  expect(backup.settings.confidence).toBe(0.95);
+  expect(backup).toHaveProperty('vault', null);
+  await page.getByLabel('Minimum AI confidence').selectOption('0.5');
+  page.on('dialog', (d) => d.accept());
+  await page.getByLabel('Import backup file').setInputFiles({
+    name: 'backup.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(backup)),
+  });
+  await expect(page.getByLabel('Minimum AI confidence')).toHaveValue('0.95');
+});

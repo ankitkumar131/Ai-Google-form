@@ -53,3 +53,23 @@ function store<T extends { id: string }>(name: string) {
 }
 export const memory = store<SavedAnswer>('answers');
 export const reports = store<RunReport>('reports');
+
+/** Replace both larger data stores in a single atomic IndexedDB transaction. */
+export async function replaceLocalData(
+  answers: SavedAnswer[],
+  history: RunReport[],
+): Promise<void> {
+  const database = await db();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction(['answers', 'reports'], 'readwrite');
+    const a = tx.objectStore('answers'),
+      r = tx.objectStore('reports');
+    a.clear();
+    r.clear();
+    for (const entry of answers) a.put(entry);
+    for (const entry of history) r.put(entry);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(new Error('Could not restore local answers and activity.'));
+    tx.onabort = () => reject(new Error('Backup restore was cancelled.'));
+  });
+}

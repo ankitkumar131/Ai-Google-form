@@ -2,6 +2,12 @@
 
 A privacy-conscious **Manifest V3 Chrome extension** that gets repetitive form filling out of the way. Built from [`instruction.md`](instruction.md) using React, TypeScript, Vite, SCSS, Lucide, Zod, Chrome APIs and IndexedDB.
 
+## Updating an existing installation to 1.0.1
+
+**Keep the existing extension installed.** Build the update into the same `dist` folder you originally loaded, or replace the files in the existing unpacked-extension folder with the new ZIP contents. Then click **Reload** at `chrome://extensions`, approve updated permissions if prompted, close old popup/dashboard windows, and reopen them. Refresh the Google Form before retrying. Using the same extension folder preserves its ID, profiles and encrypted vault. Removing the extension or loading a different folder may create a separate data store.
+
+See [1.0.1 fixes and verification](docs/FIXES-1.0.1.md).
+
 ## Get started
 
 Requires **Node.js 22+** and **Chrome 120+**.
@@ -14,8 +20,8 @@ npm run build
 1. Open `chrome://extensions` and enable **Developer mode**.
 2. Click **Load unpacked** and select this repository's **`dist`** directory (not the repository itself).
 3. The first-install profile page opens automatically. Add whichever details you want; nothing is required unless you mark it with a star.
-4. In **AI providers**, create a vault passphrase (at least 12 characters), add an API key and model, enable the provider and test the connection. The default model IDs are editable; availability depends on your provider account.
-5. Reload any form pages that were open before installation. Open the extension popup and click **Answer all**.
+4. In **AI providers**, create a vault passphrase (at least 12 characters), add an API key and model, enable the provider and test the connection. The default model IDs are editable; availability depends on your provider account. Paste a base endpoint or a full operation URL (such as `/chat/completions`); FormPilot normalizes it. **Save & test connection** saves the current key/configuration and then makes a real request, showing the request URL and elapsed time. A fast 404 is still a real HTTP response, usually indicating a bad model ID or endpoint.
+5. Open the extension popup on your form and click **Answer all**. On user action, FormPilot can inject its scanner into an already-open tab if needed. Reload the page if a website still blocks access.
 6. Review the completion report in **Activity**, inspect the original form, and submit it yourself. FormPilot **never submits** a form.
 
 **No API key is required for profile matches or confirmed saved answers.** AI requests use your own provider account and may incur charges. Never put keys in source files, environment variables intended for Vite, or the web preview.
@@ -45,7 +51,7 @@ To try a safe form, visit `http://localhost:5173/playground.html` in the same Ch
 - Seven adapters: **OpenAI, Anthropic, Gemini, OpenRouter, Groq, DeepSeek and custom OpenAI-compatible HTTPS endpoints**.
 - Confidence-based review, exact choice matching, native setters and DOM events, preserved existing values, stale-field guards, format validation and verification of retained values.
 - Review reports with answer sources (**Profile / Saved answer / AI / Manual**), manual correction/application, and explicit confirmation before saving an answer.
-- Encrypted API-key vault, sanitized local failure logs, private data export, vault reset and complete data deletion.
+- Encrypted API-key vault, verified atomic configuration/key saves, sanitized local failure logs, complete export/import, vault reset and complete data deletion.
 - Text resume attachments (`.txt`/`.md`, up to 1 MB) stored locally for reference. Add verified resume facts to profile fields; attachments are not sent automatically to AI or uploaded into websites.
 
 ## Safety and privacy
@@ -53,13 +59,13 @@ To try a safe form, visit `http://localhost:5173/playground.html` in the same Ch
 - Passwords, file inputs, payment/identity/security fields and consent/legal attestations are not automatically filled. Single checkboxes are treated conservatively as requiring manual input.
 - Existing answers are preserved by default. Low-confidence, unsupported, ambiguous or missing answers stay for review; uncertainty alone **does not trigger provider fallback**.
 - No analytics, account system, telemetry or FormPilot backend. Provider requests happen only after a user initiates a run (or tests a connection).
-- Host permission **`<all_urls>`** is needed for universal detection and API calls to configurable endpoints; `webNavigation` enumerates frames. Only HTTP(S) content scripts are installed. Chrome's protected pages remain inaccessible.
+- Host permission **`<all_urls>`** is needed for universal detection and API calls to configurable endpoints; `webNavigation` enumerates frames; `scripting` recovers scanning in tabs opened before installation, only on user action. Only HTTP(S) content scripts are installed. Chrome's protected pages remain inaccessible.
 - Profile data is not encrypted; it is in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`. Question memory and reports live in extension-origin IndexedDB. Non-sensitive preferences also use `chrome.storage.sync`.
 - API keys are encrypted at rest using **AES-256-GCM**, a fresh 96-bit IV on each write, and **PBKDF2-SHA-256 (310,000 iterations)** with a random salt. Your passphrase is not persisted. The derived unlock key is in trusted `chrome.storage.session`, so it survives worker restarts but not the browser session. Use **Lock vault** to remove it sooner.
 - This is not an OS keychain: a compromised device, browser, unlocked extension context or malicious extension update can access data. There is no passphrase recovery. Resetting the vault discards keys but keeps profiles.
-- Only the background worker performs provider requests. Content scripts cannot read settings or vaults or invoke AI APIs. Keys are never returned to the UI or sent to page scripts. Gemini uses a header, not a query-string key. API redirects and non-HTTPS endpoints are rejected.
+- Only the background worker performs provider requests. Content scripts cannot read settings or vaults or invoke AI APIs. Routine UI/state messages never return keys, and keys are never sent to page scripts. An explicitly requested readable-key export is the only UI download exception. Gemini uses a header, not a query-string key. API redirects and non-HTTPS endpoints are rejected.
 - **Use trusted endpoints only.** Your key goes to the endpoint you configure. Only the relevant subset of profile facts is included, but question text and nearby form descriptions are also sent and may themselves contain personal information. Each fallback provider receives that same batch. Review providers' own privacy policies.
-- Exports contain personal information and confirmed answers, **never API keys**. Keep exports private. Clearing Activity removes reports and sanitized failure logs. Deleting all local data removes the database contents, preferences and vault.
+- **Complete backups include all profiles (including resume references), provider models/endpoints/priorities/timeouts/retries, preferences, confirmed answers, activity, sanitized logs and the encrypted API-key vault.** The normal export works even while locked; the original vault passphrase is needed after restore. Settings also offers an explicit **readable API keys** checkbox, requiring an unlocked vault and confirmation. This adds readable keys to the JSON—anyone with that file can use them. Keep all backups private and never commit them to Git. Session unlock keys and the vault passphrase are deliberately not exported. Import validates a version-2 backup, replaces the existing data, and locks the imported vault. Older version-1 partial exports cannot restore the full extension. Clearing Activity removes reports and sanitized failure logs. Deleting all local data removes the database contents, preferences and vault.
 
 See [architecture](docs/ARCHITECTURE.md) and [testing / compatibility](docs/TESTING.md).
 
