@@ -1,12 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="popup-document">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/popup-size.css" />
     <title>FormPilot AI</title>
   </head>
-  <body>
-    <div id="root"></div>
+  <body class="popup-page">
+    <div id="root">
+      <div class="popup-loading">
+        <strong>FormPilot AI</strong>
+        <p>Opening your form assistant…</p>
+        <a href="index.html" target="_blank" rel="noopener">Open full dashboard</a>
+      </div>
+    </div>
     <script type="module" src="/src/popup.tsx"></script>
   </body>
 </html>

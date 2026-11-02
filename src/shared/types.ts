@@ -8,6 +8,22 @@ export const providerIds = [
   'custom',
 ] as const;
 export type ProviderId = (typeof providerIds)[number];
+export interface ProviderTest {
+  checkedAt: string;
+  model: string;
+  endpoint: string;
+  requestUrl: string;
+  durationMs: number;
+  keyStatus: 'valid' | 'invalid' | 'unknown';
+  success: boolean;
+  message: string;
+  httpStatus?: number;
+}
+export interface ProviderModel {
+  id: string;
+  name: string;
+  supportedParameters: string[];
+}
 export interface Provider {
   id: ProviderId;
   name: string;
@@ -18,6 +34,7 @@ export interface Provider {
   timeout: number;
   retries: number;
   hasKey?: boolean;
+  lastTest?: ProviderTest;
 }
 export type Profile = {
   id: string;

@@ -32,6 +32,13 @@ export function saveProviderConfiguration(input: unknown, newKey?: string): Prom
       const { vaultKey } = await chrome.storage.session.get('vaultKey');
       if (vaultKey) provider.hasKey = !!(await getKeys())[provider.id];
     }
+    provider.lastTest =
+      existing &&
+      existing.model === provider.model &&
+      existing.endpoint === provider.endpoint &&
+      !key
+        ? existing.lastTest
+        : undefined;
     if (provider.enabled && !provider.hasKey)
       throw new Error('Add an API key before enabling this provider.');
     values.providers = (providers as Provider[]).map((p) => (p.id === provider.id ? provider : p));
@@ -56,7 +63,7 @@ export function removeProviderKey(id: Provider['id']) {
     await chrome.storage.local.set({
       vault,
       providers: (providers as Provider[]).map((p) =>
-        p.id === id ? { ...p, hasKey: false, enabled: false } : p,
+        p.id === id ? { ...p, hasKey: false, enabled: false, lastTest: undefined } : p,
       ),
     });
   });
@@ -72,6 +79,9 @@ export function saveProviderOrder(input: unknown) {
     const merged = providers.map((p) => ({
       ...p,
       hasKey: keys ? !!keys[p.id] : !!(old as Provider[]).find((x) => x.id === p.id)?.hasKey,
+      lastTest: (old as Provider[]).find(
+        (x) => x.id === p.id && x.model === p.model && x.endpoint === p.endpoint,
+      )?.lastTest,
     }));
     for (const p of merged)
       if (p.enabled && (!p.model || !p.endpoint || !p.hasKey))
@@ -82,4 +92,27 @@ export function saveProviderOrder(input: unknown) {
 
 export function withProviderSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
   return serialize(operation);
+}
+
+export function saveProviderTest(
+  provider: Provider,
+  key: string,
+  result: NonNullable<Provider['lastTest']>,
+) {
+  return serialize(async () => {
+    const { providers = defaultProviders } = await chrome.storage.local.get('providers');
+    const current = (providers as Provider[]).find((p) => p.id === provider.id);
+    if (!current || current.model !== provider.model || current.endpoint !== provider.endpoint)
+      return;
+    try {
+      if ((await getKeys())[provider.id] !== key) return;
+    } catch {
+      return;
+    }
+    await chrome.storage.local.set({
+      providers: (providers as Provider[]).map((p) =>
+        p.id === provider.id ? { ...p, lastTest: result } : p,
+      ),
+    });
+  });
 }

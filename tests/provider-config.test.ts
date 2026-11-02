@@ -106,3 +106,62 @@ describe('failed-save and metadata recovery', () => {
     expect((await getKeys()).openai).toBe('original-key');
   });
 });
+
+describe('durable connection diagnostics', () => {
+  const provider = defaultProviders.find((p) => p.id === 'openrouter')!;
+  const failed = {
+    checkedAt: new Date().toISOString(),
+    model: provider.model,
+    endpoint: provider.endpoint,
+    requestUrl: `${provider.endpoint}/chat/completions`,
+    durationMs: 34,
+    keyStatus: 'valid' as const,
+    success: false,
+    message: 'API key verified; model not found.',
+    httpStatus: 404,
+  };
+  const read = () =>
+    (local.providers as typeof defaultProviders).find((p) => p.id === provider.id)!;
+  it('persists failed and successful results independently of dialog lifetime and vault locking', async () => {
+    const { saveProviderTest } = await import('../src/services/provider-config');
+    await unlockVault('a sufficiently long passphrase');
+    await saveProviderConfiguration(provider, 'preserved-key');
+    await saveProviderTest(provider, 'preserved-key', failed);
+    await lockVault();
+    expect(read().lastTest).toEqual(failed);
+    await unlockVault('a sufficiently long passphrase');
+    expect((await getKeys())[provider.id]).toBe('preserved-key');
+    await saveProviderConfiguration({ ...read(), enabled: true }, '');
+    expect(read().lastTest).toEqual(failed);
+    const passed = { ...failed, success: true, message: 'Connected.', httpStatus: undefined };
+    await saveProviderTest(provider, 'preserved-key', passed);
+    expect(read().lastTest).toEqual(passed);
+  });
+  it('clears stale results after a model or key change, and rejects in-flight results for an old credential', async () => {
+    const { saveProviderTest } = await import('../src/services/provider-config');
+    await unlockVault('a sufficiently long passphrase');
+    await saveProviderConfiguration(provider, 'old-key');
+    await saveProviderTest(provider, 'old-key', failed);
+    await saveProviderConfiguration(provider, 'new-key');
+    expect(read().lastTest).toBeUndefined();
+    await saveProviderTest(provider, 'old-key', failed);
+    expect(read().lastTest).toBeUndefined();
+    await saveProviderTest(provider, 'new-key', failed);
+    await saveProviderConfiguration({ ...provider, model: 'changed-model' });
+    expect(read().lastTest).toBeUndefined();
+    await saveProviderTest(provider, 'new-key', failed);
+    expect(read().lastTest).toBeUndefined();
+  });
+  it('preserves current results during stale-UI reordering, and clears them on key removal', async () => {
+    const { saveProviderTest, saveProviderOrder, removeProviderKey } =
+      await import('../src/services/provider-config');
+    await unlockVault('a sufficiently long passphrase');
+    await saveProviderConfiguration(provider, 'saved-key');
+    await saveProviderTest(provider, 'saved-key', failed);
+    await saveProviderOrder(defaultProviders);
+    expect(read().lastTest).toEqual(failed);
+    await removeProviderKey(provider.id);
+    expect(read().lastTest).toBeUndefined();
+    expect(read().hasKey).toBe(false);
+  });
+});

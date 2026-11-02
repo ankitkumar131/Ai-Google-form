@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FormPilot AI",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A thoughtful AI copilot for forms. Fill from your profile, reuse confirmed answers, and review AI suggestions.",
   "permissions": [
     "storage",

@@ -1,5 +1,7 @@
 # FormPilot 1.0.1 — reported issues
 
+> Historical notes: the user subsequently reproduced a tiny native Chrome toolbar popup and an OpenRouter 404. The responsive webpage tests below did **not** verify Chrome action-popup auto-sizing or the user’s provider account. See [1.0.2](FIXES-1.0.2.md) for the follow-up changes and current limits.
+
 ## 1. Clipped interface
 
 Chrome action popups cannot grow indefinitely (normally a 600px height cap). The previous layout allowed the content to grow beyond that height, and its React root did not establish a definite percentage-height chain. The popup now has an explicit viewport-bound root, a scrolling content region, and a persistent Answer all action area. Sidebars scroll on short screens, modal headers stay outside scrollable bodies, long URLs wrap, and narrow settings rows wrap instead of overflowing.

@@ -30,6 +30,17 @@ export const answerEnvelope = z
       .max(100),
   })
   .strict();
+export const providerTestSchema = z.object({
+  checkedAt: z.string(),
+  model: z.string().max(200),
+  endpoint: z.string().max(500),
+  requestUrl: z.string().max(800),
+  durationMs: z.number().nonnegative(),
+  keyStatus: z.enum(['valid', 'invalid', 'unknown']),
+  success: z.boolean(),
+  message: z.string().max(2500),
+  httpStatus: z.number().int().optional(),
+});
 export const providerSchema = z.object({
   id: z.enum(['openai', 'anthropic', 'gemini', 'openrouter', 'groq', 'deepseek', 'custom']),
   name: z.string().min(1).max(100),
@@ -40,6 +51,7 @@ export const providerSchema = z.object({
   timeout: z.number().int().min(3000).max(25000),
   retries: z.number().int().min(0).max(2),
   hasKey: z.boolean().optional(),
+  lastTest: providerTestSchema.optional(),
 });
 export const settingsSchema = z.object({
   onboardingComplete: z.boolean(),

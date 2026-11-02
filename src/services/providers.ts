@@ -51,7 +51,7 @@ export function providerRequestUrl(provider: Provider): string {
       ? `${base}/models/${encodeURIComponent(p.model)}:generateContent`
       : `${base}/chat/completions`;
 }
-function httpFailure(status: number, url: string): string {
+function httpFailure(status: number, url: string, method = 'POST'): string {
   const hint =
     status === 404
       ? 'Endpoint or model not found. Check the API URL and model ID.'
@@ -64,7 +64,41 @@ function httpFailure(status: number, url: string): string {
             : status === 400
               ? 'The provider rejected the model or request parameters.'
               : 'The provider could not complete this request.';
-  return `HTTP ${status}: ${hint} Request: POST ${url}`;
+  return `HTTP ${status}: ${hint} Request: ${method} ${url}`;
+}
+/** Only a bounded provider explanation is used, never raw response metadata or
+ * request bodies. Redact the exact credential as well as token-like substrings. */
+export function sanitizeProviderMessage(value: string, key: string): string {
+  return value
+    .split(key || '\0')
+    .join('[redacted]')
+    .replace(/Bearer\s+[^\s"',;]+/gi, 'Bearer [redacted]')
+    .replace(/sk-[a-zA-Z0-9_-]+/g, '[redacted]')
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .slice(0, 650);
+}
+export async function providerHttpError(
+  response: Response,
+  url: string,
+  key: string,
+  method = 'POST',
+): Promise<ProviderError> {
+  let explanation = '';
+  try {
+    const raw = await response.text();
+    if (raw.length <= 16384) {
+      const body = JSON.parse(raw);
+      const message = body?.error?.message;
+      if (typeof message === 'string') explanation = sanitizeProviderMessage(message, key);
+    }
+  } catch {
+    /* HTML proxy errors are not useful diagnostics. */
+  }
+  return new ProviderError(
+    `${httpFailure(response.status, url, method)}${explanation ? ` Provider says: ${explanation}` : ''}`,
+    response.status === 429 || response.status >= 500,
+    response.status,
+  );
 }
 function requestFor(p: Provider, key: string, questions: Question[], profile?: Profile) {
   p = normalizeProvider(p);
@@ -107,12 +141,15 @@ function requestFor(p: Provider, key: string, questions: Question[], profile?: P
     headers.Authorization = `Bearer ${key}`;
     body = {
       model: p.model,
-      temperature: 0.1,
+      ...(p.id === 'openrouter' ? {} : { temperature: 0.1 }),
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: data },
       ],
-      response_format: { type: 'json_object' },
+      // OpenRouter routes include models without native JSON-mode support.
+      // Forcing response_format can produce a 404 'No endpoints found'.
+      // The prompt and our strict Zod validator still require JSON answers.
+      ...(p.id === 'openrouter' ? {} : { response_format: { type: 'json_object' } }),
     };
   }
   return { url, headers, body: JSON.stringify(body) };
@@ -142,6 +179,7 @@ export class ProviderError extends Error {
   constructor(
     message: string,
     public retryable = false,
+    public httpStatus?: number,
   ) {
     super(message);
   }
@@ -173,11 +211,7 @@ export async function queryProvider(
       credentials: 'omit',
       redirect: 'error',
     });
-    if (!response.ok)
-      throw new ProviderError(
-        httpFailure(response.status, req.url),
-        response.status === 429 || response.status >= 500,
-      );
+    if (!response.ok) throw await providerHttpError(response, req.url, key);
     const payload = await response.json();
     const text =
       p.id === 'anthropic'

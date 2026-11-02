@@ -2,11 +2,11 @@
 
 A privacy-conscious **Manifest V3 Chrome extension** that gets repetitive form filling out of the way. Built from [`instruction.md`](instruction.md) using React, TypeScript, Vite, SCSS, Lucide, Zod, Chrome APIs and IndexedDB.
 
-## Updating an existing installation to 1.0.1
+## Updating an existing installation to 1.0.2
 
 **Keep the existing extension installed.** Build the update into the same `dist` folder you originally loaded, or replace the files in the existing unpacked-extension folder with the new ZIP contents. Then click **Reload** at `chrome://extensions`, approve updated permissions if prompted, close old popup/dashboard windows, and reopen them. Refresh the Google Form before retrying. Using the same extension folder preserves its ID, profiles and encrypted vault. Removing the extension or loading a different folder may create a separate data store.
 
-See [1.0.1 fixes and verification](docs/FIXES-1.0.1.md).
+See [1.0.2 fixes and verification limits](docs/FIXES-1.0.2.md), which supersedes the popup/OpenRouter claims in the [earlier 1.0.1 notes](docs/FIXES-1.0.1.md).
 
 ## Get started
 
@@ -20,7 +20,7 @@ npm run build
 1. Open `chrome://extensions` and enable **Developer mode**.
 2. Click **Load unpacked** and select this repository's **`dist`** directory (not the repository itself).
 3. The first-install profile page opens automatically. Add whichever details you want; nothing is required unless you mark it with a star.
-4. In **AI providers**, create a vault passphrase (at least 12 characters), add an API key and model, enable the provider and test the connection. The default model IDs are editable; availability depends on your provider account. Paste a base endpoint or a full operation URL (such as `/chat/completions`); FormPilot normalizes it. **Save & test connection** saves the current key/configuration and then makes a real request, showing the request URL and elapsed time. A fast 404 is still a real HTTP response, usually indicating a bad model ID or endpoint.
+4. In **AI providers**, create a vault passphrase (at least 12 characters), add an API key and model, enable the provider and test the connection. The default model IDs are editable; availability depends on your provider account. Paste a base endpoint or a full operation URL (such as `/chat/completions`); FormPilot normalizes it. **Save & test connection** saves the current key/configuration and then makes a real request, showing the request URL and elapsed time. For OpenRouter, it first checks authentication separately, then tests the selected model without forcing native JSON-mode/temperature support. A valid key does not guarantee a model route. Bounded, credential-redacted provider explanations, the model, URL and timestamp are retained when reopening Configure. Use **Load available OpenRouter models** to explicitly choose a current model ID (free and paid models may be listed); no model is silently substituted. A masked saved-key placeholder is not a deleted key.
 5. Open the extension popup on your form and click **Answer all**. On user action, FormPilot can inject its scanner into an already-open tab if needed. Reload the page if a website still blocks access.
 6. Review the completion report in **Activity**, inspect the original form, and submit it yourself. FormPilot **never submits** a form.
 

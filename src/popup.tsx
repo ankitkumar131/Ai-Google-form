@@ -19,6 +19,7 @@ import { isExtension, request } from './ui/bridge';
 import { initialState } from './shared/defaults';
 import type { RunReport } from './shared/types';
 import './ui/styles.scss';
+import { applyPopupDimensions } from './ui/popup-size';
 function Popup() {
   const [state, setState] = useState(initialState),
     [tab, setTab] = useState<chrome.tabs.Tab>(),
@@ -203,4 +204,6 @@ function Popup() {
   );
 }
 document.body.classList.add('popup-page');
+applyPopupDimensions(isExtension);
+if (!isExtension) window.addEventListener('resize', () => applyPopupDimensions(false));
 createRoot(document.getElementById('root')!).render(<Popup />);

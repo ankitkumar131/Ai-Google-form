@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpRight, KeyRound, LockKeyhole, ShieldCheck } from 'lucide-react';
-import type { Provider } from '../../shared/types';
+import type { Provider, ProviderModel, ProviderTest } from '../../shared/types';
 import { providerSchema } from '../../shared/schema';
 import { request } from '../bridge';
 import { Badge, Busy, Button, Modal, ProviderIcon, Toggle } from '../components';
@@ -13,7 +13,19 @@ export function Providers({ state, update, notify }: PageProps) {
     [test, setTest] = useState(''),
     [vault, setVault] = useState(false),
     [formError, setFormError] = useState(''),
-    [testing, setTesting] = useState(false);
+    [testing, setTesting] = useState(false),
+    [models, setModels] = useState<ProviderModel[]>([]),
+    [modelFilter, setModelFilter] = useState('');
+  const describeTest = (result: ProviderTest) =>
+    `${result.message} ${result.durationMs} ms · Model: ${result.model} · ${new Date(result.checkedAt).toLocaleString()} · Model endpoint: ${result.requestUrl}`;
+  const openProvider = (p: Provider) => {
+    setEditing({ ...p, enabled: p.hasKey ? p.enabled : true });
+    setKey('');
+    setModels([]);
+    setModelFilter('');
+    setTest(p.lastTest?.success ? describeTest(p.lastTest) : '');
+    setFormError(p.lastTest && !p.lastTest.success ? describeTest(p.lastTest) : '');
+  };
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setFormError('');
@@ -98,7 +110,7 @@ export function Providers({ state, update, notify }: PageProps) {
           </p>
         </div>
         <Badge tone="green">
-          {state.providers.filter((p) => p.enabled && p.hasKey).length} of 7 connected
+          {state.providers.filter((p) => p.enabled && p.hasKey).length} of 7 configured
         </Badge>
       </div>
       <div className="provider-list">
@@ -130,6 +142,16 @@ export function Providers({ state, update, notify }: PageProps) {
                 {index === 0 && <Badge>First in line</Badge>}
               </h3>
               <p>{p.model || 'Choose your model'}</p>
+              {p.lastTest && (
+                <p className="provider-last-test">
+                  {p.lastTest.success
+                    ? 'Last test passed'
+                    : p.lastTest.keyStatus === 'valid'
+                      ? 'Key verified · model test failed'
+                      : 'Last test failed'}{' '}
+                  · {new Date(p.lastTest.checkedAt).toLocaleString()}
+                </p>
+              )}
             </div>
             <span className="provider-timeout">
               {p.timeout / 1000}s timeout · {p.retries} {p.retries === 1 ? 'retry' : 'retries'}
@@ -145,7 +167,7 @@ export function Providers({ state, update, notify }: PageProps) {
               onChange={(enabled) => {
                 if (enabled && (!p.hasKey || !p.model || !p.endpoint)) {
                   notify('Configure a model, endpoint and API key first.');
-                  setEditing({ ...p, enabled: p.hasKey ? p.enabled : true });
+                  openProvider(p);
                   return;
                 }
                 void run(() =>
@@ -158,10 +180,7 @@ export function Providers({ state, update, notify }: PageProps) {
             <Button
               variant="outline"
               onClick={() => {
-                setEditing({ ...p, enabled: p.hasKey ? p.enabled : true });
-                setKey('');
-                setTest('');
-                setFormError('');
+                openProvider(p);
               }}
             >
               Configure <ArrowUpRight size={14} />
@@ -256,6 +275,74 @@ export function Providers({ state, update, notify }: PageProps) {
                   placeholder="Provider model identifier"
                 />
               </label>
+              {editing.id === 'openrouter' && (
+                <div className="span-2 model-discovery">
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        const available = await request<ProviderModel[]>('PROVIDER_MODELS', {
+                          provider: editing,
+                        });
+                        setModels(available);
+                      })
+                    }
+                  >
+                    {busy && !testing ? (
+                      <Busy label="Loading…" />
+                    ) : (
+                      'Load available OpenRouter models'
+                    )}
+                  </Button>
+                  <p className="form-note">
+                    Model access is separate from API-key validity. Choose an exact catalog ID. No
+                    model is substituted automatically; your provider may charge for model tests.
+                  </p>
+                  {models.length > 0 && (
+                    <>
+                      <label className="field">
+                        Filter available models
+                        <input
+                          value={modelFilter}
+                          onChange={(e) => setModelFilter(e.target.value)}
+                          placeholder="Search model ID or name"
+                        />
+                      </label>
+                      <label className="field">
+                        Available OpenRouter models
+                        <select
+                          value={editing.model}
+                          onChange={(e) => setEditing({ ...editing, model: e.target.value })}
+                        >
+                          <option value="">Choose a current model…</option>
+                          {!models.some((m) => m.id === editing.model) && editing.model && (
+                            <option value={editing.model}>
+                              {editing.model} (not found in catalog)
+                            </option>
+                          )}
+                          {models
+                            .filter((m) =>
+                              (m.id + ' ' + m.name)
+                                .toLowerCase()
+                                .includes(modelFilter.toLowerCase()),
+                            )
+                            .slice(0, 200)
+                            .map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.name} — {m.id}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <p className="form-note">
+                        {models.length} models loaded. Filter to narrow the list; showing at most
+                        200 matches. Choose deliberately: free and paid models may be listed.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
               <label className="field span-2">
                 API endpoint (base or full operation URL)
                 <input
@@ -275,10 +362,24 @@ export function Providers({ state, update, notify }: PageProps) {
                   value={key}
                   onChange={(e) => setKey(e.target.value)}
                   placeholder={
-                    state.vaultUnlocked ? 'Paste your API key' : 'Unlock your vault to add a key'
+                    editing.hasKey
+                      ? '•••••••• — saved key (leave unchanged)'
+                      : state.vaultUnlocked
+                        ? 'Paste your API key'
+                        : 'Unlock your vault to add a key'
                   }
                 />
               </label>
+              {editing.hasKey && (
+                <div className="saved-key-state span-2">
+                  <ShieldCheck size={16} />
+                  <strong>API key saved securely</strong>
+                  <span>
+                    {state.vaultUnlocked ? 'Vault unlocked' : 'Vault locked'} · leave the key field
+                    unchanged to reuse it
+                  </span>
+                </div>
+              )}
               <p className="form-note span-2">
                 {editing.hasKey
                   ? 'An API key is already saved in your encrypted vault. The blank box does not mean it was deleted. Leave it blank to keep that key.'
@@ -362,21 +463,24 @@ export function Providers({ state, update, notify }: PageProps) {
                     setTesting(true);
                     setTest('Saving configuration and contacting provider…');
                     try {
-                      const result = await request<{
-                        message: string;
-                        requestUrl: string;
-                        model: string;
-                        durationMs: number;
-                      }>('TEST_PROVIDER', {
+                      const result = await request<ProviderTest>('TEST_PROVIDER', {
                         provider: editing,
                         ...(key.trim() ? { key: key.trim() } : {}),
                         save: true,
                       });
                       setKey('');
-                      setEditing({ ...editing, hasKey: true });
-                      setTest(
-                        `${result.message} ${result.durationMs} ms · ${result.model} · POST ${result.requestUrl}`,
+                      // The background finishes/persists even if the dialog was closed.
+                      // Do not reopen it or replace edits made while the test ran.
+                      setEditing((current) =>
+                        current?.id === editing.id
+                          ? { ...current, hasKey: true, lastTest: result }
+                          : current,
                       );
+                      if (result.success) setTest(describeTest(result));
+                      else {
+                        setTest('');
+                        setFormError(describeTest(result));
+                      }
                       await update('STATE', {});
                     } catch (error) {
                       setTest('');

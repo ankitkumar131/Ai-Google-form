@@ -1,0 +1,27 @@
+/* Loaded before JavaScript: intrinsic pixel dimensions are intentional. Do not
+   replace these with vw/vh or percentages of Chrome's initial popup viewport. */
+html.popup-document,
+html.popup-document body.popup-page,
+html.popup-document #root {
+  box-sizing: border-box;
+  width: var(--popup-width, 384px);
+  min-width: var(--popup-width, 384px);
+  max-width: none;
+  height: var(--popup-height, 560px);
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+.popup-loading {
+  box-sizing: border-box;
+  padding: 28px;
+  font: 14px/1.7 system-ui;
+  background: #fafbf5;
+  color: #254f42;
+  height: 100%;
+}
+.popup-loading a {
+  display: inline-block;
+  color: #254f42;
+  margin-top: 18px;
+}

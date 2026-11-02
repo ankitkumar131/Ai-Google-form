@@ -3,7 +3,8 @@ import { profileSchema, providerSchema, savedAnswerSchema, settingsSchema } from
 import { loadState, saveReport } from '../services/storage';
 import { memory, reports } from '../services/memory';
 import { getKeys, lockVault, unlockVault } from '../services/vault';
-import { queryProvider, providerRequestUrl, normalizeProvider } from '../services/providers';
+import { normalizeProvider } from '../services/providers';
+import { diagnoseProvider, listProviderModels } from '../services/provider-diagnostics';
 import {
   beginDataReset,
   endDataReset,
@@ -15,6 +16,7 @@ import {
 } from './runner';
 import { createBackup, restoreBackup } from '../services/backup';
 import {
+  saveProviderTest,
   saveProviderConfiguration,
   saveProviderOrder,
   removeProviderKey,
@@ -108,12 +110,16 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         await chrome.storage.local.remove('vault');
         const s = await loadState();
         await chrome.storage.local.set({
-          providers: s.providers.map((p) => ({ ...p, hasKey: false, enabled: false })),
+          providers: s.providers.map((p) => ({
+            ...p,
+            hasKey: false,
+            enabled: false,
+            lastTest: undefined,
+          })),
         });
         return loadState();
       }
       case 'TEST_PROVIDER': {
-        const started = performance.now();
         const candidate = normalizeProvider(providerSchema.parse(message.provider));
         if (!candidate.model || !candidate.endpoint)
           throw new Error('Enter a model and API endpoint before testing.');
@@ -127,36 +133,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         const keys = await getKeys();
         if (!keys[p.id])
           throw new Error('No saved API key for this provider. Add a key and use Save & test.');
-        const url = providerRequestUrl(p);
-        try {
-          await queryProvider(p, keys[p.id], [
-            {
-              id: 'test',
-              frameId: 0,
-              text: 'What is 2 + 2?',
-              type: 'text',
-              options: [],
-              required: false,
-              context: 'Connection test',
-              name: '',
-              autocomplete: '',
-              currentValue: '',
-              sensitive: false,
-            },
-          ]);
-        } catch (error) {
-          throw new Error(
-            `${message.save === true ? 'Settings and API key are saved. Connection test failed. ' : ''}${error instanceof Error ? error.message : 'Connection failed.'} (${Math.round(performance.now() - started)} ms)`,
-          );
-        }
-        return {
-          message: 'Connected. Saved key, model access and structured answers verified.',
-          provider: p.name,
-          model: p.model,
-          requestUrl: url,
-          durationMs: Math.round(performance.now() - started),
-        };
+        const result = await diagnoseProvider(p, keys[p.id]);
+        await saveProviderTest(p, keys[p.id], result);
+        return result;
       }
+      case 'PROVIDER_MODELS':
+        return listProviderModels(providerSchema.parse(message.provider));
       case 'BANK_LIST':
         return memory.list();
       case 'BANK_SAVE': {

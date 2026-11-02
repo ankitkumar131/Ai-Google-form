@@ -3011,10 +3011,10 @@ h3 {
 /* Viewport containment: Chrome popup height is capped at 600px; a laptop's
    available height may be smaller still. Keep actions fixed and scroll content. */
 body.popup-page {
-  width: 384px;
-  max-width: 100vw;
+  width: var(--popup-width, 384px);
+  max-width: none;
   min-width: 0;
-  height: min(600px, 100dvh);
+  height: var(--popup-height, 560px);
   overflow: hidden;
   .popup {
     width: 100%;
@@ -3234,4 +3234,29 @@ body.popup-page > #root {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+.saved-key-state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d5e3c9;
+  border-radius: 7px;
+  background: #f0f6e9;
+  color: #517944;
+  font-size: 11px;
+  span {
+    flex-basis: 100%;
+    font-size: 10px;
+    color: #718661;
+  }
+}
+.model-discovery {
+  margin-bottom: 18px;
+}
+.provider-info .provider-last-test {
+  white-space: normal;
+  font-size: 9px;
+  color: #98703c;
 }
