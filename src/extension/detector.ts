@@ -2,6 +2,7 @@ import type { Answer, FillResult, Option, Question, QuestionType } from '../shar
 import { normalize } from '../services/profile';
 import { adapterContainer, adapterTitle } from './adapters';
 interface Entry {
+  url: string;
   question: Question;
   elements: HTMLElement[];
   options: HTMLElement[];
@@ -337,15 +338,91 @@ export class FormDetector {
         },
       };
       if (type === 'select' && !options.length) q.type = 'unknown';
-      this.entries.set(q.id, { question: q, elements, options: optionNodes });
+      this.entries.set(q.id, { url: location.href, question: q, elements, options: optionNodes });
     }
     return [...this.entries.values()].map((e) => e.question);
   }
-  async fill(answer: Answer, preserveExisting: boolean): Promise<FillResult> {
-    const entry = this.entries.get(answer.questionId);
+  /** Rebind a detached control only to ONE exact same-document question. Keep
+   * original snapshots for the rest of the batch; never map by position alone. */
+  private resolve(id: string): Entry | undefined {
+    const original = this.entries.get(id);
+    if (!original || original.url !== location.href) return;
+    if ([...original.elements, ...original.options].every((el) => el.isConnected)) return original;
+    const previous = this.entries;
+    this.entries = new Map();
+    let match: Entry | undefined;
+    try {
+      this.scan();
+      const signature = (q: Question) =>
+        JSON.stringify([
+          q.text,
+          q.type,
+          q.name,
+          q.context,
+          q.required,
+          q.sensitive,
+          q.options,
+          q.constraints,
+        ]);
+      const candidates = [...this.entries.values()].filter(
+        (entry) => signature(entry.question) === signature(original.question),
+      );
+      if (candidates.length === 1) match = { ...candidates[0], question: original.question };
+    } finally {
+      this.entries = previous;
+    }
+    if (match) this.entries.set(id, match);
+    return match;
+  }
+  verify(answer: Answer): FillResult {
+    const entry = this.resolve(answer.questionId);
+    const fail = (reason: string) => ({ questionId: answer.questionId, success: false, reason });
+    if (!entry) return fail('The question was removed or changed before the final check.');
+    const q = entry.question,
+      el = entry.elements[0];
+    if (
+      !entry.elements.every(isVisible) ||
+      getType(el) !== q.type ||
+      questionLabel(el, q.type === 'radio' || q.type === 'checkbox').slice(0, 2000) !== q.text
+    )
+      return fail('The question changed before the final check.');
+    if ((el.getAttribute('name') || el.id) !== q.name)
+      return fail('The field identity changed before the final check.');
+    if (q.options.length) {
+      const labels =
+        el instanceof HTMLSelectElement
+          ? [...el.options].filter((o) => !o.disabled && !!o.value).map((o) => o.text.trim())
+          : q.type === 'radio' || q.type === 'checkbox'
+            ? entry.elements.map(choiceLabel)
+            : entry.options.map((o) => text(o));
+      if (
+        labels.length !== q.options.length ||
+        labels.some((label, i) => label !== q.options[i].label)
+      )
+        return fail('The available choices changed before the final check.');
+    }
+    const expected = Array.isArray(answer.answer) ? answer.answer : [answer.answer];
+    return retainedValue(entry.elements, q.type) === expectedValue(expected, q.type)
+      ? {
+          questionId: answer.questionId,
+          success: true,
+          reason: 'Filled and verified at final check.',
+        }
+      : fail(
+          'The answer changed or was cleared after filling. Review this field; no overwrite was attempted.',
+        );
+  }
+  async fill(
+    answer: Answer,
+    preserveExisting: boolean,
+    stopped: () => boolean = () => false,
+  ): Promise<FillResult> {
+    const entry = this.resolve(answer.questionId);
     const failure = (reason: string) => ({ questionId: answer.questionId, success: false, reason });
     if (!entry) return failure('Field changed. Scan again.');
-    const { question: q, elements, options } = entry;
+    if (stopped()) return failure('Run cancelled before filling.');
+    const { question: q } = entry;
+    let { elements, options } = entry;
     const el = elements[0];
     if (
       !elements.every(
@@ -397,16 +474,68 @@ export class FormDetector {
           );
         fire(el);
       } else if (q.type === 'radio' || q.type === 'checkbox') {
-        for (let i = 0; i < elements.length; i++) {
-          const node = elements[i];
-          const wanted = values.some((v) => normalize(v) === normalize(q.options[i]?.label || ''));
-          const checked =
-            node instanceof HTMLInputElement
-              ? node.checked
-              : node.getAttribute('aria-checked') === 'true';
-          if (wanted !== checked) {
+        // Radios are exclusive: click the requested option only. Clicking an
+        // old selected option to "uncheck" it can undo a delayed selection.
+        const indices =
+          q.type === 'radio'
+            ? [q.options.findIndex((o) => normalize(o.label) === normalize(value))]
+            : q.options.map((_, i) => i);
+        const inFlight = new Set(
+          elements
+            .filter((node) =>
+              node instanceof HTMLInputElement
+                ? node.checked
+                : node.getAttribute('aria-checked') === 'true',
+            )
+            .map((node) => normalize(choiceLabel(node))),
+        );
+        for (const i of indices) {
+          if (stopped()) return failure('Run cancelled while filling.');
+          const live = this.resolve(q.id);
+          if (!live || !live.elements[i])
+            return failure('Question changed while selecting choices.');
+          elements = live.elements;
+          options = live.options;
+          if (
+            q.type === 'checkbox' &&
+            retainedValue(elements, q.type) !== JSON.stringify([...inFlight].sort())
+          )
+            return failure('Choices changed while filling. No further overwrite was attempted.');
+          const node = elements[i],
+            wanted = values.some((v) => normalize(v) === normalize(q.options[i]?.label || ''));
+          const checked = (el: HTMLElement) =>
+            el instanceof HTMLInputElement
+              ? el.checked
+              : el.getAttribute('aria-checked') === 'true';
+          if (wanted !== checked(node)) {
             node.focus({ preventScroll: true });
+            if (!node.isConnected) return failure('Question changed before selecting a choice.');
             node.click();
+            if (q.type === 'checkbox') {
+              const label = normalize(q.options[i].label);
+              if (wanted) inFlight.add(label);
+              else inFlight.delete(label);
+            }
+            // Wait for this toggle to settle before the next click, resolving
+            // rerendered nodes by exact identity rather than using stale handles.
+            let retained = false;
+            for (let attempt = 0; attempt < 16; attempt++) {
+              await delay(70);
+              if (stopped()) return failure('Run cancelled while verifying choices.');
+              const updated = this.resolve(q.id);
+              if (updated?.elements[i] && checked(updated.elements[i]) === wanted) {
+                elements = updated.elements;
+                options = updated.options;
+                retained = true;
+                break;
+              }
+            }
+            if (!retained) return failure('The website did not retain this choice. Please review.');
+            if (
+              q.type === 'checkbox' &&
+              retainedValue(elements, q.type) !== JSON.stringify([...inFlight].sort())
+            )
+              return failure('Choices changed while filling. No further overwrite was attempted.');
           }
         }
       } else if (q.type === 'select') {
@@ -414,7 +543,15 @@ export class FormDetector {
         if (index < 0 || !options[index]) return failure('Custom dropdown needs manual review.');
         if (!isVisible(options[index])) {
           el.click();
-          await delay(120);
+          for (let attempt = 0; attempt < 16 && !isVisible(options[index]); attempt++) {
+            await delay(70);
+            if (stopped()) return failure('Run cancelled while opening dropdown.');
+            const live = this.resolve(q.id);
+            if (live) {
+              elements = live.elements;
+              options = live.options;
+            }
+          }
         }
         if (!isVisible(options[index])) return failure('Dropdown option is not accessible.');
         options[index].click();
@@ -444,29 +581,18 @@ export class FormDetector {
       } else return failure('Unsupported custom control.');
       await delay(80);
       let after = currentValue(elements, q.type);
-      const expected =
-        q.type === 'checkbox' ? values.map(normalize).sort().join('|') : normalize(value);
-      const readActual = () =>
-        q.type === 'checkbox'
-          ? elements[0] instanceof HTMLSelectElement
-            ? [...elements[0].selectedOptions]
-                .map((o) => normalize(o.text))
-                .sort()
-                .join('|')
-            : elements
-                .filter((e) =>
-                  e instanceof HTMLInputElement
-                    ? e.checked
-                    : e.getAttribute('aria-checked') === 'true',
-                )
-                .map((e) => normalize(choiceLabel(e)))
-                .sort()
-                .join('|')
-          : normalize(currentValue(elements, q.type));
+      const expected = expectedValue(values, q.type);
+      const readActual = () => {
+        const live = this.resolve(q.id);
+        if (!live) return null;
+        elements = live.elements;
+        options = live.options;
+        return retainedValue(elements, q.type);
+      };
       let actual = readActual();
       for (let attempt = 0; actual !== expected && attempt < 10; attempt++) {
         await delay(70);
-        if (!el.isConnected) return failure('The page changed while verifying the answer.');
+        if (stopped()) return failure('Run cancelled while verifying the answer.');
         actual = readActual();
       }
       after = currentValue(elements, q.type);
@@ -478,6 +604,25 @@ export class FormDetector {
       return failure('This control could not be filled safely.');
     }
   }
+}
+function expectedValue(values: string[], type: QuestionType) {
+  return type === 'checkbox'
+    ? JSON.stringify(values.map(normalize).sort())
+    : normalize(values[0] || '');
+}
+function retainedValue(elements: HTMLElement[], type: QuestionType) {
+  if (type !== 'checkbox') return normalize(currentValue(elements, type));
+  const values =
+    elements[0] instanceof HTMLSelectElement
+      ? [...elements[0].selectedOptions].map((o) => o.text.trim())
+      : elements
+          .filter((el) =>
+            el instanceof HTMLInputElement
+              ? el.checked
+              : el.getAttribute('aria-checked') === 'true',
+          )
+          .map(choiceLabel);
+  return JSON.stringify(values.map(normalize).sort());
 }
 function fire(el: HTMLElement) {
   el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));

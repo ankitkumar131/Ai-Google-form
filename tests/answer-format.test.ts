@@ -182,3 +182,62 @@ describe('model request output contract and format diagnostics', () => {
     },
   );
 });
+
+describe('run-only partial-batch validation', () => {
+  const second = question({ id: 'q2' }),
+    good = answer().answers[0];
+  it('salvages valid rows but the default parser still rejects an omitted question', () => {
+    const raw = JSON.stringify({ answers: [good] });
+    expect(() => parseAnswers(raw, [question(), second])).toThrow();
+    expect(parseAnswers(raw, [question(), second], true)).toHaveLength(1);
+  });
+  it('keeps a valid row when another has invalid confidence, without fabricating the missing row', () => {
+    const raw = JSON.stringify({
+      answers: [good, { ...good, questionId: 'q2', confidence: 'invalid' }],
+    });
+    expect(parseAnswers(raw, [question(), second], true).map((a) => a.questionId)).toEqual(['q1']);
+  });
+  it('discards every duplicate ID rather than arbitrarily selecting an answer', () => {
+    const raw = JSON.stringify({
+      answers: [good, { ...good, answer: 'different' }, { ...good, questionId: 'q2' }],
+    });
+    expect(parseAnswers(raw, [question(), second], true).map((a) => a.questionId)).toEqual(['q2']);
+  });
+  it('never maps unknown IDs to a missing question', () => {
+    const raw = JSON.stringify({ answers: [good, { ...good, questionId: 'unknown' }] });
+    expect(parseAnswers(raw, [question(), second], true).map((a) => a.questionId)).toEqual(['q1']);
+  });
+  it('never accepts an unknown option merely to improve completion counts', () => {
+    const q = question({
+      id: 'q2',
+      type: 'radio',
+      options: [{ id: 'one', label: '4', value: '4' }],
+    });
+    const raw = JSON.stringify({
+      answers: [good, { ...good, questionId: 'q2', questionType: 'radio', answer: 'not a choice' }],
+    });
+    expect(parseAnswers(raw, [question(), q], true).map((a) => a.questionId)).toEqual(['q1']);
+  });
+  it('does not retry by increasing low confidence or replacing explicit uncertainty', () => {
+    const raw = JSON.stringify({ answers: [{ ...good, confidence: 0.1, answer: '' }] });
+    expect(parseAnswers(raw, [question()], true)[0]).toMatchObject({ answer: '', confidence: 0.1 });
+  });
+  it('still rejects malformed syntax and extra envelope metadata', () => {
+    expect(() => parseAnswers('not JSON', [question()], true)).toThrow();
+    expect(() =>
+      parseAnswers(JSON.stringify({ answers: [good], other: true }), [question()], true),
+    ).toThrow();
+  });
+  it('rejects an entirely invalid or oversized batch', () => {
+    expect(() =>
+      parseAnswers(
+        JSON.stringify({ answers: [{ ...good, confidence: undefined }] }),
+        [question()],
+        true,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseAnswers(JSON.stringify({ answers: Array(101).fill(good) }), [question()], true),
+    ).toThrow();
+  });
+});

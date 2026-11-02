@@ -163,3 +163,114 @@ describe('existing-tab content script recovery', () => {
     });
   });
 });
+
+describe('thirty-question batch regressions', () => {
+  const prepare = () => {
+    state.settings.aiEnabled = true;
+    questions = Array.from({ length: 30 }, (_, i) =>
+      question({ id: `q${i}`, text: `Question ${i + 1}: What is 2 + 2?` }),
+    );
+  };
+  const answers = (qs: Question[]) =>
+    qs.map((q) => ({
+      questionId: q.id,
+      questionType: q.type,
+      answer: '4',
+      confidence: 0.99,
+      source: 'AI' as const,
+    }));
+  it('continues later batches after a failure and fills each successful batch before the next request', async () => {
+    prepare();
+    let calls = 0;
+    mocked.withFallback.mockImplementation(async (_providers, _keys, qs: Question[]) => {
+      calls++;
+      const fills = sent.mock.calls.filter((call) => call[1].type === 'FP_FILL');
+      if (calls > 1) expect(fills.length).toBeGreaterThan(0);
+      if (calls === 2) throw new Error('Batch failed.');
+      return { provider: 'Test', answers: answers(qs) };
+    });
+    const report = await runAll(1);
+    expect(calls).toBe(3);
+    expect(report.results.filter((r) => r.status === 'filled')).toHaveLength(20);
+    expect(report.results.slice(20).every((r) => r.status === 'filled')).toBe(true);
+  });
+  it('recovers 12-of-30 partial results inside one run, with only missing questions requested again', async () => {
+    prepare();
+    mocked.withFallback.mockImplementation(async (_p, _k, qs: Question[]) => ({
+      provider: 'Test',
+      answers: answers(qs.slice(0, 4)),
+    }));
+    const report = await runAll(1);
+    expect(report.results.every((r) => r.status === 'filled')).toBe(true);
+    expect(mocked.withFallback.mock.calls.map((args) => args[2].length)).toEqual([
+      10, 10, 10, 6, 6, 6, 2, 2, 2,
+    ]);
+    expect(mocked.withFallback.mock.calls.every((args) => args[6] === true)).toBe(true);
+  });
+  it('never retries a returned low-confidence or empty answer', async () => {
+    prepare();
+    mocked.withFallback.mockImplementation(async (_p, _k, qs: Question[]) => ({
+      provider: 'Test',
+      answers: answers(qs).map((a, i) => ({
+        ...a,
+        confidence: i === 0 ? 0.1 : a.confidence,
+        answer: i === 1 ? '' : a.answer,
+      })),
+    }));
+    const report = await runAll(1);
+    expect(mocked.withFallback).toHaveBeenCalledTimes(3);
+    expect(report.results.filter((r) => r.status === 'review')).toHaveLength(6);
+    expect(report.results.filter((r) => r.status === 'filled')).toHaveLength(24);
+  });
+  it('splits malformed batches with a strict six-recovery-request cap', async () => {
+    prepare();
+    mocked.withFallback.mockRejectedValue(
+      Object.assign(new Error('Malformed batch.'), { failureKind: 'format' }),
+    );
+    const report = await runAll(1);
+    expect(mocked.withFallback).toHaveBeenCalledTimes(9);
+    expect(report.results.every((r) => r.status === 'review')).toBe(true);
+    expect(mocked.withFallback.mock.calls.slice(3).every((args) => args[2].length === 5)).toBe(
+      true,
+    );
+  });
+  it('retains filled progress on cancellation and never starts the remaining batches', async () => {
+    const { cancelRun } = await import('../src/extension/runner');
+    prepare();
+    let calls = 0;
+    mocked.withFallback.mockImplementation(async (_p, _k, qs: Question[]) => {
+      calls++;
+      if (calls === 2) {
+        cancelRun(1);
+        throw new Error('Run cancelled.');
+      }
+      return { provider: 'Test', answers: answers(qs) };
+    });
+    const report = await runAll(1);
+    expect(calls).toBe(2);
+    expect(report.results.filter((r) => r.status === 'filled')).toHaveLength(10);
+    expect(report.results.slice(10).every((r) => r.reason.includes('cancelled'))).toBe(true);
+  });
+  it('downgrades a cleared final value instead of claiming success or overwriting it', async () => {
+    const original = sent.getMockImplementation()! as (...args: unknown[]) => Promise<unknown>;
+    sent.mockImplementation(async (...args: unknown[]) => {
+      const message = args[1] as { type: string; answers: { questionId: string }[] };
+      if (message.type === 'FP_VERIFY')
+        return {
+          results: message.answers.map((a) => ({
+            questionId: a.questionId,
+            success: false,
+            reason: 'Value cleared by website.',
+          })),
+        };
+      return original(...args);
+    });
+    const report = await runAll(1);
+    expect(
+      report.results.every(
+        (r) => r.status === 'review' && r.reason === 'Value cleared by website.',
+      ),
+    ).toBe(true);
+    expect(sent.mock.calls.filter((call) => call[1].type === 'FP_FILL')).toHaveLength(1);
+  });
+});

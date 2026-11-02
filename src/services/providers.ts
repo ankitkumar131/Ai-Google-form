@@ -168,7 +168,7 @@ function requestFor(p: Provider, key: string, questions: Question[], profile?: P
 }
 /** No model-generated content is included in errors or persisted diagnostics. */
 export class AnswerFormatError extends Error {}
-export function parseAnswers(raw: string, questions: Question[]): Answer[] {
+export function parseAnswers(raw: string, questions: Question[], allowPartial = false): Answer[] {
   const cleaned = raw
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
@@ -190,6 +190,8 @@ export function parseAnswers(raw: string, questions: Question[]): Answer[] {
     throw new AnswerFormatError(
       'The JSON response must contain an answers array, not a bare number, string or unrelated object.',
     );
+  if ((value as { answers: unknown[] }).answers.length > 100)
+    throw new AnswerFormatError('The response contains too many answers.');
   // Limited numeric transport normalization only. Never invent IDs, types, confidence,
   // missing answers, choices or facts to make an otherwise invalid reply pass.
   const normalized = {
@@ -209,6 +211,34 @@ export function parseAnswers(raw: string, questions: Question[]): Answer[] {
       return row;
     }),
   };
+  if (allowPartial) {
+    // Salvage independently valid rows only in a filling run. Connection tests
+    // and the default parser remain all-or-nothing. Never synthesize metadata.
+    if (Object.keys(normalized).some((key) => key !== 'answers') || normalized.answers.length > 100)
+      throw new AnswerFormatError(
+        'The response contains unexpected envelope fields or too many answers.',
+      );
+    const ids = normalized.answers.map((row) =>
+      row && typeof row === 'object' && !Array.isArray(row)
+        ? (row as Record<string, unknown>).questionId
+        : undefined,
+    );
+    const accepted: Answer[] = [];
+    for (const row of normalized.answers) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+      const id = (row as Record<string, unknown>).questionId;
+      const q = questions.find((q) => q.id === id);
+      if (!q || ids.filter((other) => other === id).length !== 1) continue;
+      try {
+        accepted.push(...parseAnswers(JSON.stringify({ answers: [row] }), [q]));
+      } catch {
+        /* invalid row remains unfilled; a bounded recovery request may retry it */
+      }
+    }
+    if (!accepted.length)
+      throw new AnswerFormatError('No independently valid answers were returned for this batch.');
+    return accepted;
+  }
   const validated = answerEnvelope.safeParse(normalized);
   if (!validated.success) {
     const fields = ['questionId', 'questionType', 'answer', 'confidence', 'reason'];
@@ -258,6 +288,7 @@ export async function queryProvider(
   questions: Question[],
   profile?: Profile,
   signal?: AbortSignal,
+  allowPartial = false,
 ): Promise<Answer[]> {
   p = normalizeProvider(p);
   const controller = new AbortController();
@@ -346,7 +377,7 @@ export async function queryProvider(
         'format',
       );
     try {
-      return parseAnswers(text, questions);
+      return parseAnswers(text, questions, allowPartial);
     } catch (error) {
       throw new ProviderError(
         `Invalid or malformed answer JSON. ${error instanceof AnswerFormatError ? error.message : 'Structured-answer validation failed.'}`,
@@ -372,6 +403,7 @@ export async function withFallback(
   profile: Profile | undefined,
   log: (failure: Failure) => Promise<void>,
   signal?: AbortSignal,
+  allowPartial = false,
 ): Promise<{ answers: Answer[]; provider: string }> {
   const available = [...providers]
     .filter((p) => p.enabled && keys[p.id])
@@ -380,15 +412,17 @@ export async function withFallback(
     throw new Error(
       'No enabled AI provider with a saved API key. Enable a configured provider in AI providers.',
     );
+  let formatFailure = false;
   for (const p of available) {
     for (let attempt = 0; attempt <= p.retries; attempt++) {
       try {
         return {
-          answers: await queryProvider(p, keys[p.id], questions, profile, signal),
+          answers: await queryProvider(p, keys[p.id], questions, profile, signal, allowPartial),
           provider: p.name,
         };
       } catch (error) {
         if (signal?.aborted) throw new Error('Run cancelled.');
+        if (error instanceof ProviderError && error.failureKind === 'format') formatFailure = true;
         const message = error instanceof ProviderError ? error.message : 'Provider unavailable.';
         await log({ date: new Date().toISOString(), provider: p.name, message });
         if (!(error instanceof ProviderError && error.retryable) || attempt === p.retries) break;
@@ -409,7 +443,10 @@ export async function withFallback(
       }
     }
   }
-  throw new Error(
+  throw new ProviderError(
     'No provider succeeded. Check your API keys, models and connection in Providers.',
+    false,
+    undefined,
+    formatFailure ? 'format' : undefined,
   );
 }

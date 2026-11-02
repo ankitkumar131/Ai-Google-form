@@ -15,7 +15,7 @@ MV3 background worker
        ├─ webNavigation.getAllFrames → FP_SCAN on each accessible frame
        ├─ local profile → confirmed answer → batched provider fallback
        ├─ validate answer ID, type, schema, exact options, confidence
-       └─ FP_FILL → verified result → report
+       └─ incremental FP_FILL → read-only FP_VERIFY → report
             ▼
        Isolated content-script world in each website frame
          DOM + site adapter + open shadow roots
@@ -69,3 +69,9 @@ Token overlap alone loses negation and word order (“move from Pune to Mumbai�
 ## Complete backups
 
 A backup contains profiles, providers, preferences, saved answers, reports, failure logs and encrypted vault bytes. Optional readable keys require explicit UI consent and an unlocked vault. Neither the passphrase nor the derived session unlock key is exported. Provider writes and backup snapshots/restores share a serialized lock. Restore validates all references before writes, replaces answers/reports atomically in IndexedDB, compensates persistent-store failures with the previous snapshot, and locks the imported vault.
+
+## Bounded multi-batch completion (1.0.4)
+
+`runAll` commits profile/memory matches first, then commits each successful provider batch without waiting for the entire generation loop. Batch failures are isolated. The default parser and connection tests remain strict; only the run path opts into per-row validation of a complete JSON envelope. Duplicate, unknown, missing-confidence and invalid-choice rows are not filled. Omitted/invalid rows are re-requested at most two recovery levels with a global cap of six extra requests, respecting the original 120-second cancellation budget. Entire malformed batches may be split; network/auth/quota errors retain provider-level retry behavior. Explicit uncertainty/empty answers are never escalated into extra attempts.
+
+The detector resolves detached controls using an exact unique snapshot (URL, text, type, field name, context, required/sensitive flags, options and constraints). It retains original value-change checks and never matches by ordinal position. Choice transitions are polled sequentially with cancellation checks. `FP_VERIFY` is read-only and audits completed values after the last batch; changed/cleared values become review items rather than triggering an overwrite.

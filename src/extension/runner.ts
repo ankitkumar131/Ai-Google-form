@@ -77,6 +77,7 @@ export async function fillTab(
   answers: Answer[],
   preserveExisting: boolean,
   signal?: AbortSignal,
+  verifyOnly = false,
 ): Promise<FillResult[]> {
   const results: FillResult[] = [];
   for (const frameId of new Set(questions.map((q) => q.frameId))) {
@@ -97,7 +98,7 @@ export async function fillTab(
     try {
       const response = await chrome.tabs.sendMessage(
         tabId,
-        { type: 'FP_FILL', answers: batch, preserveExisting },
+        { type: verifyOnly ? 'FP_VERIFY' : 'FP_FILL', answers: batch, preserveExisting },
         { frameId },
       );
       if (!Array.isArray(response?.results)) throw new Error();
@@ -179,55 +180,27 @@ export async function runAll(tabId: number): Promise<RunReport> {
       pending.push(q);
     }
     let usedProvider: string | undefined;
-    if (pending.length && state.settings.aiEnabled) {
-      try {
-        const keys = await getKeys();
-        for (let i = 0; i < pending.length; i += 10) {
-          if (controller.signal.aborted) break;
-          await progress(
-            tabId,
-            `Preparing answers ${i + 1}–${Math.min(i + 10, pending.length)} of ${pending.length}…`,
-          );
-          const response = await withFallback(
-            state.providers,
-            keys,
-            pending.slice(i, i + 10),
-            profile,
-            logFailure,
-            controller.signal,
-          );
-          usedProvider = response.provider;
-          for (const answer of response.answers) {
-            const row = results.find((r) => r.question.id === answer.questionId)!;
-            row.answer = answer;
-            row.reason = answer.reason || 'AI suggestion ready for review.';
-          }
-        }
-      } catch (error) {
-        for (const row of results.filter(
-          (r) => pending.some((q) => q.id === r.question.id) && !r.answer,
-        ))
-          row.reason = error instanceof Error ? error.message : 'AI is unavailable.';
+    const isReady = (row: FieldResult) =>
+      row.answer &&
+      row.answer.confidence >= state.settings.confidence &&
+      (Array.isArray(row.answer.answer)
+        ? row.answer.answer.length > 0
+        : row.answer.answer.trim().length > 0);
+    // Commit local and each completed AI batch immediately. A later failure or
+    // the global deadline must not discard answers already obtained safely.
+    const commit = async (rows: FieldResult[]) => {
+      const ready = rows.filter((row) => row.status === 'review' && isReady(row));
+      for (const row of rows.filter((row) => row.answer && !isReady(row)))
+        row.reason = row.answer?.reason || 'Not confident enough. Review this answer.';
+      if (!ready.length) return;
+      if (controller.signal.aborted) {
+        for (const row of ready) row.reason = 'Run cancelled before filling.';
+        return;
       }
-    } else if (pending.length) {
-      for (const row of results.filter((r) => pending.some((q) => q.id === r.question.id)))
-        row.reason = 'AI answers are disabled.';
-    }
-    const ready = results.filter(
-      (r) =>
-        r.answer &&
-        r.answer.confidence >= state.settings.confidence &&
-        (Array.isArray(r.answer.answer)
-          ? r.answer.answer.length > 0
-          : r.answer.answer.trim().length > 0),
-    );
-    for (const row of results.filter((r) => r.answer && !ready.includes(r)))
-      row.reason = row.answer?.reason || 'Not confident enough. Review this answer.';
-    if (!controller.signal.aborted) {
-      await progress(tabId, 'Filling and verifying answers…');
+      await progress(tabId, `Filling and verifying ${ready.length} answers…`);
       const filled = await fillTab(
         tabId,
-        questions,
+        ready.map((r) => r.question),
         ready.map((r) => r.answer!),
         state.settings.preserveExisting,
         controller.signal,
@@ -237,11 +210,114 @@ export async function runAll(tabId: number): Promise<RunReport> {
         row.status = outcome?.success ? 'filled' : 'failed';
         row.reason = outcome?.reason || 'Could not verify this field.';
       }
-    } else
-      for (const row of ready) {
-        row.status = 'review';
-        row.reason = 'Run cancelled before filling.';
+    };
+    await commit(results.filter((row) => row.answer));
+    if (pending.length && state.settings.aiEnabled) {
+      let keys: Record<string, string> | undefined;
+      try {
+        keys = await getKeys();
+      } catch (error) {
+        for (const row of results.filter((row) => pending.includes(row.question)))
+          row.reason = error instanceof Error ? error.message : 'Unlock your API key vault.';
       }
+      if (keys) {
+        const queue: { questions: Question[]; round: number }[] = [];
+        for (let i = 0; i < pending.length; i += 10)
+          queue.push({ questions: pending.slice(i, i + 10), round: 0 });
+        let recoveries = 0;
+        const enqueue = (questions: Question[], round: number) => {
+          if (!questions.length || round > 2 || recoveries >= 6) return;
+          recoveries++;
+          queue.push({ questions, round });
+        };
+        for (let index = 0; index < queue.length && !controller.signal.aborted; index++) {
+          const task = queue[index],
+            rows = task.questions.map((q) => results.find((row) => row.question.id === q.id)!);
+          await progress(
+            tabId,
+            `${task.round ? 'Recovering missing' : 'Preparing'} answers: ${results.filter((r) => r.answer).length} of ${questions.length} ready…`,
+          );
+          try {
+            const response = await withFallback(
+              state.providers,
+              keys,
+              task.questions,
+              profile,
+              logFailure,
+              controller.signal,
+              true,
+            );
+            usedProvider = response.provider;
+            for (const answer of response.answers) {
+              const row = rows.find(
+                (row) =>
+                  row.question.id === answer.questionId &&
+                  row.question.type === answer.questionType,
+              );
+              if (row && !row.answer) {
+                row.answer = answer;
+                row.reason = answer.reason || 'AI suggestion ready for review.';
+              }
+            }
+            await commit(rows);
+            const missing = rows.filter((row) => !row.answer);
+            for (const row of missing)
+              row.reason =
+                'The provider omitted or returned an invalid answer for this question. Review manually if bounded recovery cannot resolve it.';
+            // Retry ONLY omitted/invalid rows, never low-confidence/empty answers
+            // or already-filled fields. Other initial batches get their turn first.
+            enqueue(
+              missing.map((row) => row.question),
+              task.round + 1,
+            );
+          } catch (error) {
+            for (const row of rows.filter((row) => !row.answer))
+              row.reason =
+                error instanceof Error ? error.message : 'AI is unavailable for this batch.';
+            // Smaller requests can recover a malformed batch. Authentication,
+            // network and quota errors already have provider-level retry policy.
+            if (
+              error instanceof Error &&
+              'failureKind' in error &&
+              error.failureKind === 'format' &&
+              task.questions.length > 1
+            ) {
+              const half = Math.ceil(task.questions.length / 2);
+              enqueue(task.questions.slice(0, half), task.round + 1);
+              enqueue(task.questions.slice(half), task.round + 1);
+            }
+          }
+        }
+      }
+    } else if (pending.length) {
+      for (const row of results.filter((row) => pending.includes(row.question)))
+        row.reason = 'AI answers are disabled.';
+    }
+    if (controller.signal.aborted)
+      for (const row of results.filter((row) => row.status === 'review' && !row.answer))
+        row.reason =
+          'Run cancelled or reached its 120-second limit before this question could be answered. Completed answers were retained.';
+    // Read-only final audit: a later re-render must not make an earlier success
+    // look completed when its value disappeared. Never overwrite a user edit.
+    const completed = results.filter((row) => row.status === 'filled' && row.answer);
+    if (completed.length) {
+      const retained = await fillTab(
+        tabId,
+        completed.map((row) => row.question),
+        completed.map((row) => row.answer!),
+        true,
+        undefined,
+        true,
+      );
+      for (const row of completed) {
+        const verified = retained.find((result) => result.questionId === row.question.id);
+        if (!verified?.success) {
+          row.status = 'review';
+          row.reason =
+            verified?.reason || 'Answer was not retained at the final check. Review this field.';
+        }
+      }
+    }
     const tab = await chrome.tabs.get(tabId);
     const report: RunReport = {
       id: crypto.randomUUID(),

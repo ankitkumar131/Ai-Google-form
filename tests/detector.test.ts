@@ -182,3 +182,86 @@ describe('material form control regressions', () => {
     expect(q.options.map((o) => o.label)).toEqual(['Mars']);
   });
 });
+
+describe('re-rendered controls and final retention', () => {
+  it('rebinds an exact unique detached question without losing other pending snapshots', async () => {
+    document.body.innerHTML =
+      '<label>Arithmetic<input name="math"></label><label>Other question<input name="other"></label>';
+    const detector = new FormDetector(),
+      qs = detector.scan();
+    document.body.innerHTML = document.body.innerHTML;
+    expect((await detector.fill(answer(qs[0], '4'), true)).success).toBe(true);
+    expect((await detector.fill(answer(qs[1], '9'), true)).success).toBe(true);
+    expect(detector.verify(answer(qs[0], '4')).success).toBe(true);
+  });
+  it('does not rebind duplicate questions by position', async () => {
+    document.body.innerHTML = '<label>Arithmetic<input></label>';
+    const detector = new FormDetector(),
+      q = detector.scan()[0];
+    document.body.innerHTML = '<label>Arithmetic<input></label><label>Arithmetic<input></label>';
+    expect((await detector.fill(answer(q, '4'), true)).success).toBe(false);
+    expect([...document.querySelectorAll('input')].every((input) => input.value === '')).toBe(true);
+  });
+  it('does not overwrite a user edit on a replacement node even when preservation is disabled', async () => {
+    document.body.innerHTML = '<label>Arithmetic<input name="math"></label>';
+    const detector = new FormDetector(),
+      q = detector.scan()[0];
+    document.body.innerHTML = '<label>Arithmetic<input name="math" value="Manual edit"></label>';
+    expect((await detector.fill(answer(q, '4'), false)).success).toBe(false);
+    expect(document.querySelector('input')!.value).toBe('Manual edit');
+  });
+  it('rejects detached controls with changed question semantics', async () => {
+    document.body.innerHTML = '<label>Arithmetic<input name="math"></label>';
+    const detector = new FormDetector(),
+      q = detector.scan()[0];
+    document.body.innerHTML = '<label>Different question<input name="math"></label>';
+    expect((await detector.fill(answer(q, '4'), true)).success).toBe(false);
+  });
+  it('detects a value cleared after an initially successful fill without reapplying it', async () => {
+    document.body.innerHTML = '<label>Arithmetic<input name="math"></label>';
+    const detector = new FormDetector(),
+      q = detector.scan()[0];
+    expect((await detector.fill(answer(q, '4'), true)).success).toBe(true);
+    document.querySelector('input')!.value = '';
+    expect(detector.verify(answer(q, '4')).success).toBe(false);
+    expect(document.querySelector('input')!.value).toBe('');
+  });
+  it('honors cancellation before clicking a choice', async () => {
+    document.body.innerHTML =
+      '<fieldset><legend>Arithmetic</legend><label><input name="choice" type="radio" value="4">4</label><label><input name="choice" type="radio" value="5">5</label></fieldset>';
+    const detector = new FormDetector(),
+      q = detector.scan()[0];
+    expect((await detector.fill(answer(q, '4'), true, () => true)).success).toBe(false);
+    expect(document.querySelectorAll(':checked')).toHaveLength(0);
+  });
+});
+
+describe('choices changing during or after filling', () => {
+  it('stops checkbox writes when another choice changes unexpectedly', async () => {
+    document.body.innerHTML =
+      '<fieldset><legend>Select primes</legend>' +
+      ['2', '3', '4']
+        .map((v) => `<label><input type="checkbox" name="prime" value="${v}">${v}</label>`)
+        .join('') +
+      '</fieldset>';
+    const detector = new FormDetector(),
+      q = detector.scan()[0],
+      inputs = [...document.querySelectorAll('input')];
+    inputs[0].addEventListener('click', () => {
+      inputs[2].checked = true;
+    });
+    const result = await detector.fill(answer(q, ['2', '3']), true);
+    expect(result.success).toBe(false);
+    expect(inputs[2].checked).toBe(true);
+    expect(inputs[1].checked).toBe(false);
+  });
+  it('does not mark changed choice sets verified just because the selected label still matches', async () => {
+    document.body.innerHTML =
+      '<label>Arithmetic<select><option value="">Choose</option><option value="4">4</option><option value="5">5</option></select></label>';
+    const detector = new FormDetector(),
+      q = detector.scan()[0];
+    expect((await detector.fill(answer(q, '4'), true)).success).toBe(true);
+    document.querySelector('option[value="5"]')!.textContent = 'Different option';
+    expect(detector.verify(answer(q, '4')).success).toBe(false);
+  });
+});

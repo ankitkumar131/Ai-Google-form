@@ -53,6 +53,21 @@ function initialize() {
       respond({ stopped: true });
       return;
     }
+    if (message?.type === 'FP_VERIFY') {
+      const results = (message.answers as Answer[]).map((answer) => {
+        try {
+          return detector.verify(answer);
+        } catch {
+          return {
+            questionId: answer.questionId,
+            success: false,
+            reason: 'Final verification could not resolve this question safely.',
+          };
+        }
+      });
+      respond({ results });
+      return;
+    }
     if (message?.type === 'FP_FILL') {
       fillingStopped = false;
       // Only extension-origin background messages can initiate fills, never window.postMessage.
@@ -67,7 +82,18 @@ function initialize() {
             });
             continue;
           }
-          results.push(await detector.fill(answer, message.preserveExisting !== false));
+          try {
+            results.push(
+              await detector.fill(answer, message.preserveExisting !== false, () => fillingStopped),
+            );
+          } catch {
+            results.push({
+              questionId: answer.questionId,
+              success: false,
+              reason:
+                'This control could not be filled safely; other fields will still be processed.',
+            });
+          }
         }
         respond({ results });
       })().catch(() => respond({ error: 'Content script could not fill fields.' }));

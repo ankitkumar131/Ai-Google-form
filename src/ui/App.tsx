@@ -268,7 +268,7 @@ export function App() {
               <ShieldCheck size={13} /> Made for your workflow. Built around your privacy.
             </span>
             <span>
-              FormPilot AI <span className="footer-dot">•</span> v1.0.3
+              FormPilot AI <span className="footer-dot">•</span> v1.0.4
             </span>
           </footer>
         </main>

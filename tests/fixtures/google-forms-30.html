@@ -1,0 +1,40 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Thirty-question Google Forms regression</title>
+<style>body{font:16px system-ui;background:#eee8f5;margin:20px}.Qr7Oae{background:white;padding:18px;margin:12px 0}[role=radio],[role=checkbox],[role=option],[role=listbox]{padding:8px;border:1px solid #aaa;margin:5px;cursor:pointer}[aria-checked=true]{background:#cda}[role=listbox][aria-expanded=false] [role=option]{display:none}[role=listbox][aria-expanded=false] [aria-selected=true]{display:block}input{padding:9px}</style></head><body>
+<h1>Thirty-question regression fixture</h1><form id="questions"><button type="submit">Submit</button></form><output id="submissions">0</output>
+<script>
+// Representative markup only, not a copy of any user's live form. Delegated
+// events survive deliberate full-child re-renders after every committed answer.
+const form=document.querySelector('form');
+for(let i=1;i<=30;i++){
+ const kind=i<=20?'radio':i<=25?'checkbox':i<=28?'select':'text';
+ const title=`Question ${i}: ${kind==='radio'?'What is 2 + 2?':kind==='checkbox'?'Select the prime numbers':kind==='select'?'Which planet is called the red planet?':'What is the square of 3?'}`;
+ let controls='';
+ if(kind==='radio'||kind==='checkbox')controls=`<div role="${kind==='radio'?'radiogroup':'group'}" aria-labelledby="title-${i}">${(kind==='radio'?['3','4','5']:['2','3','4']).map(value=>`<div role="${kind}" tabindex="0" aria-label="${value}" data-answer-value="${value}" aria-checked="false">${value}</div>`).join('')}</div>`;
+ else if(kind==='select')controls=`<div role="listbox" aria-labelledby="title-${i}" aria-expanded="false" tabindex="0"><div role="option" aria-selected="true">Choose</div><div role="option" aria-selected="false" data-value="Venus">Venus</div><div role="option" aria-selected="false" data-value="Mars">Mars</div></div>`;
+ else controls=`<input name="entry.${i}" aria-labelledby="title-${i}">`;
+ form.insertAdjacentHTML('beforeend',`<div role="listitem" class="Qr7Oae" data-q="${i}"><div role="heading" id="title-${i}"><span class="M7eMe">${title}</span></div>${controls}</div>`);
+}
+const rerender=()=>{form.innerHTML=form.innerHTML;};
+form.addEventListener('input',event=>{if(event.target instanceof HTMLInputElement){event.target.setAttribute('value',event.target.value);rerender();}});
+form.addEventListener('click',event=>{
+ const node=event.target.closest('[role=radio],[role=checkbox],[role=option],[role=listbox]');if(!node)return;
+ const id=node.closest('[data-q]').dataset.q,role=node.getAttribute('role'),label=node.getAttribute('aria-label')||node.textContent.trim();
+ if(role==='radio'||role==='checkbox')setTimeout(()=>{
+  const group=form.querySelector(`[data-q="${id}"]`);
+  for(const other of group.querySelectorAll(`[role="${role}"]`)){
+   if(role==='radio')other.setAttribute('aria-checked',String(other.getAttribute('aria-label')===label));
+   else if(other.getAttribute('aria-label')===label)other.setAttribute('aria-checked',String(other.getAttribute('aria-checked')!=='true'));
+  }
+  rerender();
+ },180);
+ else if(role==='listbox')setTimeout(()=>form.querySelector(`[data-q="${id}"] [role=listbox]`).setAttribute('aria-expanded','true'),350);
+ else if(role==='option'){
+  const list=node.closest('[role=listbox]');
+  if(list.getAttribute('aria-expanded')!=='true')return;
+  for(const option of list.querySelectorAll('[role=option]'))option.setAttribute('aria-selected',String(option.textContent.trim()===label));
+  list.setAttribute('aria-expanded','false');rerender();
+ }
+});
+form.addEventListener('submit',event=>{event.preventDefault();document.querySelector('output').textContent=String(Number(document.querySelector('output').textContent)+1);});
+window.fixtureFilledCount=()=>[...form.querySelectorAll('[data-q]')].filter(card=>card.querySelector('[aria-checked=true]')||card.querySelector('input')?.value||[...card.querySelectorAll('[role=option][aria-selected=true]')].some(option=>option.textContent.trim()!=='Choose')).length;
+</script></body></html>

@@ -2,11 +2,11 @@
 
 A privacy-conscious **Manifest V3 Chrome extension** that gets repetitive form filling out of the way. Built from [`instruction.md`](instruction.md) using React, TypeScript, Vite, SCSS, Lucide, Zod, Chrome APIs and IndexedDB.
 
-## Updating an existing installation to 1.0.3
+## Updating an existing installation to 1.0.4
 
 **Keep the existing extension installed.** Build the update into the same `dist` folder you originally loaded, or replace the files in the existing unpacked-extension folder with the new ZIP contents. Then click **Reload** at `chrome://extensions`, approve updated permissions if prompted, close old popup/dashboard windows, and reopen them. Refresh the Google Form before retrying. Using the same extension folder preserves its ID, profiles and encrypted vault. Removing the extension or loading a different folder may create a separate data store.
 
-See [1.0.3 structured-answer fixes](docs/FIXES-1.0.3.md), [1.0.2 popup/authentication fixes and verification limits](docs/FIXES-1.0.2.md), and the [historical 1.0.1 notes](docs/FIXES-1.0.1.md).
+See [1.0.4 multi-batch form completion fixes](docs/FIXES-1.0.4.md), [1.0.3 structured-answer fixes](docs/FIXES-1.0.3.md), [1.0.2 popup/authentication fixes and verification limits](docs/FIXES-1.0.2.md), and the [historical 1.0.1 notes](docs/FIXES-1.0.1.md).
 
 ## Get started
 
@@ -25,6 +25,12 @@ npm run build
 6. Review the completion report in **Activity**, inspect the original form, and submit it yourself. FormPilot **never submits** a form.
 
 **No API key is required for profile matches or confirmed saved answers.** AI requests use your own provider account and may incur charges. Never put keys in source files, environment variables intended for Vite, or the web preview.
+
+### One Answer all run across larger forms
+
+Local matches and each successful AI batch are filled immediately. A failed batch does not stop later batches. During form filling only, independently valid rows of a partial response can be retained; missing/invalid rows get bounded recovery (up to two recovery levels and six extra requests per run, within the existing 120-second deadline). Returned uncertain or empty answers are not retried to force higher confidence. Additional requests can incur charges.
+
+Delayed choices settle one at a time. Detached controls can be resolved only to a unique, exact same-URL question snapshot, never by position alone; ambiguous/changed questions and user edits remain protected. A read-only final check flags answers cleared or changed by later renders instead of falsely reporting completion. Consent, sensitive questions, missing personal facts and low-confidence answers still require review. Google Forms sections on another page still require you to use Next yourself. See [1.0.4 notes](docs/FIXES-1.0.4.md) for the 30-question regression and live-form verification limits.
 
 ### Why curl returns 200 but a model test can still fail
 
