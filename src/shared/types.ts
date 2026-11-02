@@ -18,6 +18,7 @@ export interface ProviderTest {
   success: boolean;
   message: string;
   httpStatus?: number;
+  failureKind?: 'format';
 }
 export interface ProviderModel {
   id: string;

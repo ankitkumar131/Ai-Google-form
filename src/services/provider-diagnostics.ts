@@ -1,5 +1,5 @@
 // Trusted background only. Authentication and model capability are different checks.
-import type { Provider, ProviderModel, ProviderTest } from '../shared/types';
+import type { Provider, ProviderModel, ProviderTest, Question } from '../shared/types';
 import {
   normalizeProvider,
   providerRequestUrl,
@@ -61,7 +61,12 @@ export async function diagnoseProvider(provider: Provider, key: string): Promise
   const p = normalizeProvider(provider),
     started = performance.now();
   let keyStatus: ProviderTest['keyStatus'] = 'unknown';
-  const result = (success: boolean, message: string, httpStatus?: number): ProviderTest => ({
+  const result = (
+    success: boolean,
+    message: string,
+    httpStatus?: number,
+    failureKind?: 'format',
+  ): ProviderTest => ({
     checkedAt: new Date().toISOString(),
     model: p.model,
     endpoint: p.endpoint,
@@ -71,6 +76,7 @@ export async function diagnoseProvider(provider: Provider, key: string): Promise
     success,
     message,
     httpStatus,
+    failureKind,
   });
   if (p.id === 'openrouter') {
     try {
@@ -90,29 +96,18 @@ export async function diagnoseProvider(provider: Provider, key: string): Promise
     }
   }
   try {
-    await queryProvider(p, key, [
-      {
-        id: 'test',
-        frameId: 0,
-        text: 'What is 2 + 2?',
-        type: 'text',
-        options: [],
-        required: false,
-        context: 'Connection test',
-        name: '',
-        autocomplete: '',
-        currentValue: '',
-        sensitive: false,
-      },
-    ]);
+    await queryProvider(p, key, connectionTestQuestions());
     keyStatus = 'valid';
     return result(true, 'Connected. Saved key, model access and structured answers verified.');
   } catch (error) {
     const status = error instanceof ProviderError ? error.httpStatus : undefined;
+    const formatFailure = error instanceof ProviderError && error.failureKind === 'format';
+    if (formatFailure) keyStatus = 'valid';
     if (status === 401) keyStatus = 'invalid';
     const reason = error instanceof ProviderError ? error.message : 'Connection test failed.';
-    const prefix =
-      keyStatus === 'valid'
+    const prefix = formatFailure
+      ? 'API key verified and saved. Model responded, but structured-answer validation failed. '
+      : keyStatus === 'valid'
         ? 'API key verified and saved. The selected model request failed. '
         : keyStatus === 'invalid'
           ? 'The API key was rejected. '
@@ -120,7 +115,28 @@ export async function diagnoseProvider(provider: Provider, key: string): Promise
     const hint =
       p.id === 'openrouter' && status === 404
         ? ' Load available models, choose an exact current model ID, and retry. A model route can fail even with a valid API key.'
-        : '';
-    return result(false, prefix + reason + hint, status);
+        : formatFailure
+          ? ' Authentication is working. This model must return the required answers object to fill forms safely; a plain-text curl reply does not test that contract.'
+          : '';
+    return result(false, prefix + reason + hint, status, formatFailure ? 'format' : undefined);
   }
+}
+
+/** Synthetic-only fixture shared with the Windows reproduction script generator. */
+export function connectionTestQuestions(): Question[] {
+  return [
+    {
+      id: 'test',
+      frameId: 0,
+      text: 'What is 2 + 2?',
+      type: 'text',
+      options: [],
+      required: false,
+      context: 'Connection test',
+      name: '',
+      autocomplete: '',
+      currentValue: '',
+      sensitive: false,
+    },
+  ];
 }

@@ -2,11 +2,11 @@
 
 A privacy-conscious **Manifest V3 Chrome extension** that gets repetitive form filling out of the way. Built from [`instruction.md`](instruction.md) using React, TypeScript, Vite, SCSS, Lucide, Zod, Chrome APIs and IndexedDB.
 
-## Updating an existing installation to 1.0.2
+## Updating an existing installation to 1.0.3
 
 **Keep the existing extension installed.** Build the update into the same `dist` folder you originally loaded, or replace the files in the existing unpacked-extension folder with the new ZIP contents. Then click **Reload** at `chrome://extensions`, approve updated permissions if prompted, close old popup/dashboard windows, and reopen them. Refresh the Google Form before retrying. Using the same extension folder preserves its ID, profiles and encrypted vault. Removing the extension or loading a different folder may create a separate data store.
 
-See [1.0.2 fixes and verification limits](docs/FIXES-1.0.2.md), which supersedes the popup/OpenRouter claims in the [earlier 1.0.1 notes](docs/FIXES-1.0.1.md).
+See [1.0.3 structured-answer fixes](docs/FIXES-1.0.3.md), [1.0.2 popup/authentication fixes and verification limits](docs/FIXES-1.0.2.md), and the [historical 1.0.1 notes](docs/FIXES-1.0.1.md).
 
 ## Get started
 
@@ -25,6 +25,12 @@ npm run build
 6. Review the completion report in **Activity**, inspect the original form, and submit it yourself. FormPilot **never submits** a form.
 
 **No API key is required for profile matches or confirmed saved answers.** AI requests use your own provider account and may incur charges. Never put keys in source files, environment variables intended for Vite, or the web preview.
+
+### Why curl returns 200 but a model test can still fail
+
+A plain-text answer such as `4` verifies model connectivity, not the form-answer contract. Form filling requires an `answers` array with each exact question ID/type, its answer and numeric confidence. The 1.0.3 prompt explicitly asks for string-valued scalar answers and includes the actual response template in the user turn. A safe numeric scalar is converted to text only inside a valid, identified answer record; missing IDs/confidence, unknown choices and bare answers are still rejected. HTTP-200 format failures are labeled **Model reachable · answer format failed**, with a content-free validation explanation.
+
+The build also generates **`dist/Test-OpenRouter-Structured.ps1`**. Open it in a text editor, review, then paste into Windows PowerShell if you want to reproduce the *same synthetic structured test* outside the extension. It prompts for a private API key and an exact model ID. It does not read your extension vault or send profile facts; it makes one potentially billable model request. Do not share credentials or authentication/account metadata. See [1.0.3 notes](docs/FIXES-1.0.3.md) for limits.
 
 ### Web preview
 

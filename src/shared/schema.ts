@@ -40,6 +40,7 @@ export const providerTestSchema = z.object({
   success: z.boolean(),
   message: z.string().max(2500),
   httpStatus: z.number().int().optional(),
+  failureKind: z.literal('format').optional(),
 });
 export const providerSchema = z.object({
   id: z.enum(['openai', 'anthropic', 'gemini', 'openrouter', 'groq', 'deepseek', 'custom']),

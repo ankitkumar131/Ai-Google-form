@@ -1,11 +1,11 @@
 {
   "name": "formpilot-ai",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs && node scripts/build-provider-repro.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

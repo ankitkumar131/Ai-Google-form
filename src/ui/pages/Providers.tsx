@@ -146,9 +146,11 @@ export function Providers({ state, update, notify }: PageProps) {
                 <p className="provider-last-test">
                   {p.lastTest.success
                     ? 'Last test passed'
-                    : p.lastTest.keyStatus === 'valid'
-                      ? 'Key verified · model test failed'
-                      : 'Last test failed'}{' '}
+                    : p.lastTest.failureKind === 'format'
+                      ? 'Model reachable · answer format failed'
+                      : p.lastTest.keyStatus === 'valid'
+                        ? 'Key verified · model test failed'
+                        : 'Last test failed'}{' '}
                   · {new Date(p.lastTest.checkedAt).toLocaleString()}
                 </p>
               )}

@@ -309,3 +309,78 @@ test('OpenRouter keeps a verified key and failed model diagnostic, then uses an 
   await expect(page.getByRole('status').filter({ hasText: 'Connected.' })).toBeVisible();
   await expect(page.getByLabel('Model ID', { exact: true })).toHaveValue('vendor/current:free');
 });
+
+test('reported Gemma model: numeric JSON passes, while HTTP 200 plain text stays a persisted format failure', async ({
+  page,
+}) => {
+  let generation = 0;
+  const bodies: Record<string, any>[] = [];
+  await page.route('https://openrouter.ai/**', async (route) => {
+    const req = route.request(),
+      headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'authorization,content-type',
+        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      };
+    if (req.method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers });
+      return;
+    }
+    let payload: unknown = { data: {} };
+    if (req.method() === 'POST') {
+      bodies.push(req.postDataJSON());
+      generation++;
+      const content =
+        generation === 1
+          ? JSON.stringify({ answers: [{ questionId: 'test', questionType: 'text', answer: 4 }] })
+          : generation === 2
+            ? '4'
+            : JSON.stringify({
+                answers: [
+                  { questionId: 'test', questionType: 'text', answer: 4, confidence: 0.98 },
+                ],
+              });
+      payload = { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] };
+    }
+    await route.fulfill({
+      status: 200,
+      headers,
+      contentType: 'application/json',
+      body: JSON.stringify(payload),
+    });
+  });
+  await page.goto('/#providers');
+  await page.getByRole('button', { name: 'Set up vault', exact: true }).click();
+  await page.getByLabel('Vault passphrase', { exact: true }).fill('a long format test passphrase');
+  await page.getByRole('button', { name: 'Create vault', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your API vault is unlocked' })).toBeVisible();
+  const card = page
+    .locator('.provider-card')
+    .filter({ has: page.getByRole('heading', { name: 'OpenRouter', exact: true }) });
+  await card.getByRole('button', { name: 'Configure' }).click();
+  await page.getByLabel('Model ID', { exact: true }).fill('google/gemma-4-26b-a4b-it:free');
+  await page.getByLabel('API key', { exact: true }).fill('sk-or-fake-format-browser');
+  await page.getByRole('button', { name: 'Save & test connection', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText(
+    'Model responded, but structured-answer validation failed',
+  );
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('confidence');
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await page.reload();
+  await expect(card).toContainText('Model reachable · answer format failed');
+  await card.getByRole('button', { name: 'Configure' }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('confidence');
+  await page.getByRole('button', { name: 'Save & test connection', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('answers array');
+  await expect(page.getByRole('status').filter({ hasText: 'Connected.' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Save & test connection', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Connected.' })).toBeVisible();
+  expect(generation).toBe(3);
+  expect(bodies[2].messages[1].content).toContain(
+    '"questionId":"test","questionType":"text","answer":"","confidence":0',
+  );
+  expect(bodies[2]).not.toHaveProperty('response_format');
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await page.reload();
+  await expect(card).toContainText('Last test passed');
+});
